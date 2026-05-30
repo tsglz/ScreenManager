@@ -8,6 +8,10 @@ const navItems = [
   { path: '/monthly', label: '月', icon: '🗓️' },
 ]
 
+const bottomNavItems = [
+  { path: '/settings', label: '设置', icon: '⚙️' },
+]
+
 function Sidebar() {
   return (
     <nav className="sidebar">
@@ -17,6 +21,19 @@ function Sidebar() {
       </div>
       <ul className="nav-list">
         {navItems.map((item) => (
+          <li key={item.path}>
+            <NavLink
+              to={item.path}
+              className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+            >
+              <span className="nav-icon">{item.icon}</span>
+              <span className="nav-label">{item.label}</span>
+            </NavLink>
+          </li>
+        ))}
+      </ul>
+      <ul className="nav-list bottom">
+        {bottomNavItems.map((item) => (
           <li key={item.path}>
             <NavLink
               to={item.path}

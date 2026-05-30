@@ -4,6 +4,7 @@ import Dashboard from './pages/Dashboard'
 import Daily from './pages/Daily'
 import Weekly from './pages/Weekly'
 import Monthly from './pages/Monthly'
+import Settings from './pages/Settings'
 
 function App() {
   return (
@@ -14,6 +15,7 @@ function App() {
           <Route path="daily" element={<Daily />} />
           <Route path="weekly" element={<Weekly />} />
           <Route path="monthly" element={<Monthly />} />
+          <Route path="settings" element={<Settings />} />
         </Route>
       </Routes>
     </BrowserRouter>

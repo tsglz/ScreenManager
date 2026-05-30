@@ -3,6 +3,8 @@ use rusqlite::{params, Connection, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+pub const CURRENT_SCHEMA_VERSION: i32 = 3;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UsageRecord {
     pub id: i64,
@@ -46,25 +48,87 @@ pub struct Database {
 
 impl Database {
     pub fn new() -> Result<Self> {
-        let app_dir = dirs::data_local_dir()
+        let app_dir = dirs::data_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join("ScreenManager");
+            .join("ScreenTime");
 
         std::fs::create_dir_all(&app_dir).map_err(|e| {
             rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Null, Box::new(e))
         })?;
 
-        let db_path = app_dir.join("usage.db");
+        let db_path = app_dir.join("screen_time.db");
         let conn = Connection::open(&db_path)?;
 
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
 
-        Self::create_tables(&conn)?;
+        let schema_version = Self::get_schema_version(&conn)?;
+
+        Self::run_migrations(&conn, schema_version)?;
 
         Ok(Self { conn })
     }
 
-    fn create_tables(conn: &Connection) -> Result<()> {
+    fn get_schema_version(conn: &Connection) -> Result<i32> {
+        let has_schema_version = conn
+            .query_row(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'",
+                [],
+                |_| Ok(()),
+            )
+            .is_ok();
+
+        if has_schema_version {
+            let version: i32 = conn.query_row(
+                "SELECT version FROM schema_version ORDER BY id DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )?;
+            Ok(version)
+        } else {
+            Ok(0)
+        }
+    }
+
+    fn run_migrations(conn: &Connection, from_version: i32) -> Result<()> {
+        if from_version < CURRENT_SCHEMA_VERSION {
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS schema_version (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    version INTEGER NOT NULL,
+                    applied_at TEXT NOT NULL
+                )",
+                [],
+            )?;
+        }
+
+        if from_version < 1 {
+            Self::migration_v1(conn)?;
+            conn.execute(
+                "INSERT INTO schema_version (version, applied_at) VALUES (1, datetime('now'))",
+                [],
+            )?;
+        }
+
+        if from_version < 2 {
+            Self::migration_v2(conn)?;
+            conn.execute(
+                "INSERT INTO schema_version (version, applied_at) VALUES (2, datetime('now'))",
+                [],
+            )?;
+        }
+
+        if from_version < 3 {
+            Self::migration_v3(conn)?;
+            conn.execute(
+                "INSERT INTO schema_version (version, applied_at) VALUES (3, datetime('now'))",
+                [],
+            )?;
+        }
+
+        Ok(())
+    }
+
+    fn migration_v1(conn: &Connection) -> Result<()> {
         conn.execute(
             r#"
             CREATE TABLE IF NOT EXISTS usage_records (
@@ -104,25 +168,42 @@ impl Database {
         )?;
 
         conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_usage_records_start_time ON usage_records(start_time)",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_daily_summary_date ON daily_summary(date)",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_app_categories_process_name ON app_categories(process_name)",
+            [],
+        )?;
+
+        Ok(())
+    }
+
+    fn migration_v2(conn: &Connection) -> Result<()> {
+        conn.execute(
             r#"
-            CREATE INDEX IF NOT EXISTS idx_usage_records_start_time
-            ON usage_records(start_time)
+            CREATE TABLE IF NOT EXISTS categories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                color TEXT,
+                icon TEXT
+            )
             "#,
             [],
         )?;
 
         conn.execute(
             r#"
-            CREATE INDEX IF NOT EXISTS idx_daily_summary_date
-            ON daily_summary(date)
-            "#,
-            [],
-        )?;
-
-        conn.execute(
-            r#"
-            CREATE INDEX IF NOT EXISTS idx_app_categories_process_name
-            ON app_categories(process_name)
+            CREATE TABLE IF NOT EXISTS config (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
             "#,
             [],
         )?;
@@ -130,8 +211,28 @@ impl Database {
         Ok(())
     }
 
-    fn format_datetime(dt: &NaiveDateTime) -> String {
-        dt.format("%Y-%m-%dT%H:%M:%S").to_string()
+    fn migration_v3(conn: &Connection) -> Result<()> {
+        conn.execute(
+            r#"
+            CREATE TABLE IF NOT EXISTS update_info (
+                id INTEGER PRIMARY KEY,
+                skip_version TEXT,
+                last_check TEXT
+            )
+            "#,
+            [],
+        )?;
+
+        conn.execute(
+            "INSERT OR IGNORE INTO update_info (id, skip_version, last_check) VALUES (1, NULL, NULL)",
+            [],
+        )?;
+
+        Ok(())
+    }
+
+    pub fn get_schema_version_current(&self) -> Result<i32> {
+        Self::get_schema_version(&self.conn)
     }
 
     pub fn repair_abnormal_records(&self) -> Result<()> {
@@ -547,7 +648,7 @@ impl Database {
             "#,
         )?;
 
-        let records = stmt.query_map(params![limit], |row| {
+        let results = stmt.query_map(params![limit], |row| {
             Ok(UsageRecord {
                 id: row.get(0)?,
                 process_name: row.get(1)?,
@@ -558,65 +659,118 @@ impl Database {
             })
         })?;
 
-        records.collect()
+        results.collect()
     }
 
     pub fn get_daily_total(&self, date: &str) -> Result<i64> {
+        let date_obj = NaiveDate::parse_from_str(date, "%Y-%m-%d").map_err(|_| {
+            rusqlite::Error::InvalidParameterName("Invalid date format".to_string())
+        })?;
+        let start_of_day = date_obj.and_hms_opt(0, 0, 0).unwrap();
+        let end_of_day = date_obj.and_hms_opt(23, 59, 59).unwrap();
+
+        let start_str = Self::format_datetime(&start_of_day);
+        let end_str = Self::format_datetime(&end_of_day);
+
         let mut stmt = self.conn.prepare(
-            "SELECT COALESCE(SUM(duration_seconds), 0) FROM daily_summary WHERE date = ?1",
+            r#"
+            SELECT COALESCE(SUM(duration_seconds), 0)
+            FROM usage_records
+            WHERE start_time >= ?1 AND start_time <= ?2
+            "#,
         )?;
-        let result: i64 = stmt.query_row(params![date], |row| row.get(0))?;
+
+        let result: i64 = stmt.query_row(params![start_str, end_str], |row| row.get(0))?;
         Ok(result)
     }
 
     pub fn get_daily_top_apps(&self, date: &str, limit: usize) -> Result<Vec<(String, i64)>> {
+        let date_obj = NaiveDate::parse_from_str(date, "%Y-%m-%d").map_err(|_| {
+            rusqlite::Error::InvalidParameterName("Invalid date format".to_string())
+        })?;
+        let start_of_day = date_obj.and_hms_opt(0, 0, 0).unwrap();
+        let end_of_day = date_obj.and_hms_opt(23, 59, 59).unwrap();
+
+        let start_str = Self::format_datetime(&start_of_day);
+        let end_str = Self::format_datetime(&end_of_day);
+
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT process_name, duration_seconds
-            FROM daily_summary
-            WHERE date = ?1
-            ORDER BY duration_seconds DESC
-            LIMIT ?2
+            SELECT process_name, SUM(duration_seconds) as total_duration
+            FROM usage_records
+            WHERE start_time >= ?1 AND start_time <= ?2
+            GROUP BY process_name
+            ORDER BY total_duration DESC
+            LIMIT ?3
             "#,
         )?;
-        let results = stmt.query_map(params![date, limit], |row| Ok((row.get(0)?, row.get(1)?)))?;
+
+        let results =
+            stmt.query_map(params![start_str, end_str, limit], |row| Ok((row.get(0)?, row.get(1)?)))?;
+
         results.collect()
     }
 
     pub fn get_daily_all_apps(&self, date: &str) -> Result<Vec<(String, i64)>> {
+        let date_obj = NaiveDate::parse_from_str(date, "%Y-%m-%d").map_err(|_| {
+            rusqlite::Error::InvalidParameterName("Invalid date format".to_string())
+        })?;
+        let start_of_day = date_obj.and_hms_opt(0, 0, 0).unwrap();
+        let end_of_day = date_obj.and_hms_opt(23, 59, 59).unwrap();
+
+        let start_str = Self::format_datetime(&start_of_day);
+        let end_str = Self::format_datetime(&end_of_day);
+
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT process_name, duration_seconds
-            FROM daily_summary
-            WHERE date = ?1
-            ORDER BY duration_seconds DESC
+            SELECT process_name, SUM(duration_seconds) as total_duration
+            FROM usage_records
+            WHERE start_time >= ?1 AND start_time <= ?2
+            GROUP BY process_name
+            ORDER BY total_duration DESC
             "#,
         )?;
-        let results = stmt.query_map(params![date], |row| Ok((row.get(0)?, row.get(1)?)))?;
+
+        let results = stmt.query_map(params![start_str, end_str], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })?;
+
         results.collect()
     }
 
     pub fn get_current_week_stats(&self) -> Result<WeekStats> {
         let today = Local::now().date_naive();
-        let week_start =
-            today - chrono::Duration::days(today.weekday().num_days_from_monday() as i64);
+        let days_since_monday = today.weekday().num_days_from_monday() as i64;
+        let week_start = today - chrono::Duration::days(days_since_monday);
         let week_end = week_start + chrono::Duration::days(6);
 
-        let week_start_str = week_start.format("%Y-%m-%d").to_string();
-        let week_end_str = week_end.format("%Y-%m-%d").to_string();
-
-        let mut stmt = self.conn.prepare(
-            r#"
-            SELECT COALESCE(SUM(duration_seconds), 0)
-            FROM daily_summary
-            WHERE date >= ?1 AND date <= ?2
-            "#,
+        let total = self.get_date_range_total(
+            week_start.format("%Y-%m-%d").to_string(),
+            week_end.format("%Y-%m-%d").to_string(),
         )?;
-        let total: i64 = stmt.query_row(params![week_start_str, week_end_str], |row| row.get(0))?;
 
         Ok(WeekStats {
-            week_start: week_start_str,
-            week_end: week_end_str,
+            week_start: week_start.format("%Y-%m-%d").to_string(),
+            week_end: week_end.format("%Y-%m-%d").to_string(),
+            total_duration: total,
+        })
+    }
+
+    pub fn get_previous_week_stats(&self) -> Result<WeekStats> {
+        let today = Local::now().date_naive();
+        let days_since_monday = today.weekday().num_days_from_monday() as i64;
+        let current_week_start = today - chrono::Duration::days(days_since_monday);
+        let previous_week_start = current_week_start - chrono::Duration::days(7);
+        let previous_week_end = previous_week_start + chrono::Duration::days(6);
+
+        let total = self.get_date_range_total(
+            previous_week_start.format("%Y-%m-%d").to_string(),
+            previous_week_end.format("%Y-%m-%d").to_string(),
+        )?;
+
+        Ok(WeekStats {
+            week_start: previous_week_start.format("%Y-%m-%d").to_string(),
+            week_end: previous_week_end.format("%Y-%m-%d").to_string(),
             total_duration: total,
         })
     }
@@ -629,90 +783,82 @@ impl Database {
     ) -> Result<Vec<(String, i64)>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT process_name, SUM(duration_seconds) as total
+            SELECT process_name, SUM(duration_seconds) as total_duration
             FROM daily_summary
             WHERE date >= ?1 AND date <= ?2
             GROUP BY process_name
-            ORDER BY total DESC
+            ORDER BY total_duration DESC
             LIMIT ?3
             "#,
         )?;
-        let results = stmt.query_map(params![week_start, week_end, limit], |row| {
-            Ok((row.get(0)?, row.get(1)?))
-        })?;
+
+        let results =
+            stmt.query_map(params![week_start, week_end, limit], |row| Ok((row.get(0)?, row.get(1)?)))?;
+
         results.collect()
     }
 
     pub fn get_week_daily_stats(&self, week_start: &str, week_end: &str) -> Result<Vec<DateStats>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT date, SUM(duration_seconds) as total
+            SELECT date, SUM(duration_seconds) as total_duration
             FROM daily_summary
             WHERE date >= ?1 AND date <= ?2
             GROUP BY date
             ORDER BY date ASC
             "#,
         )?;
+
         let results = stmt.query_map(params![week_start, week_end], |row| {
             Ok(DateStats {
                 date: row.get(0)?,
                 total_duration: row.get(1)?,
             })
         })?;
+
         results.collect()
-    }
-
-    pub fn get_previous_week_stats(&self) -> Result<WeekStats> {
-        let today = Local::now().date_naive();
-        let current_week_start =
-            today - chrono::Duration::days(today.weekday().num_days_from_monday() as i64);
-        let prev_week_end = current_week_start - chrono::Duration::days(1);
-        let prev_week_start = prev_week_end - chrono::Duration::days(6);
-
-        let week_start_str = prev_week_start.format("%Y-%m-%d").to_string();
-        let week_end_str = prev_week_end.format("%Y-%m-%d").to_string();
-
-        let mut stmt = self.conn.prepare(
-            r#"
-            SELECT COALESCE(SUM(duration_seconds), 0)
-            FROM daily_summary
-            WHERE date >= ?1 AND date <= ?2
-            "#,
-        )?;
-        let total: i64 = stmt.query_row(params![week_start_str, week_end_str], |row| row.get(0))?;
-
-        Ok(WeekStats {
-            week_start: week_start_str,
-            week_end: week_end_str,
-            total_duration: total,
-        })
     }
 
     pub fn get_current_month_stats(&self) -> Result<DateStats> {
         let today = Local::now().date_naive();
-        let month_start = NaiveDate::from_ymd_opt(today.year(), today.month(), 1).unwrap();
-        let month_end = if today.month() == 12 {
+        let first_day_of_month = NaiveDate::from_ymd_opt(today.year(), today.month(), 1).unwrap();
+        let last_day_of_month = if today.month() == 12 {
             NaiveDate::from_ymd_opt(today.year() + 1, 1, 1).unwrap() - chrono::Duration::days(1)
         } else {
             NaiveDate::from_ymd_opt(today.year(), today.month() + 1, 1).unwrap()
                 - chrono::Duration::days(1)
         };
 
-        let month_start_str = month_start.format("%Y-%m-%d").to_string();
-        let month_end_str = month_end.format("%Y-%m-%d").to_string();
-
-        let mut stmt = self.conn.prepare(
-            r#"
-            SELECT COALESCE(SUM(duration_seconds), 0)
-            FROM daily_summary
-            WHERE date >= ?1 AND date <= ?2
-            "#,
+        let total = self.get_date_range_total(
+            first_day_of_month.format("%Y-%m-%d").to_string(),
+            last_day_of_month.format("%Y-%m-%d").to_string(),
         )?;
-        let total: i64 =
-            stmt.query_row(params![month_start_str, month_end_str], |row| row.get(0))?;
 
         Ok(DateStats {
-            date: month_start_str,
+            date: first_day_of_month.format("%Y-%m").to_string(),
+            total_duration: total,
+        })
+    }
+
+    pub fn get_previous_month_stats(&self) -> Result<DateStats> {
+        let today = Local::now().date_naive();
+        let first_day_of_current_month =
+            NaiveDate::from_ymd_opt(today.year(), today.month(), 1).unwrap();
+        let last_day_of_previous_month = first_day_of_current_month - chrono::Duration::days(1);
+        let first_day_of_previous_month = NaiveDate::from_ymd_opt(
+            last_day_of_previous_month.year(),
+            last_day_of_previous_month.month(),
+            1,
+        )
+        .unwrap();
+
+        let total = self.get_date_range_total(
+            first_day_of_previous_month.format("%Y-%m-%d").to_string(),
+            last_day_of_previous_month.format("%Y-%m-%d").to_string(),
+        )?;
+
+        Ok(DateStats {
+            date: first_day_of_previous_month.format("%Y-%m").to_string(),
             total_duration: total,
         })
     }
@@ -725,56 +871,64 @@ impl Database {
     ) -> Result<Vec<(String, i64)>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT process_name, SUM(duration_seconds) as total
+            SELECT process_name, SUM(duration_seconds) as total_duration
             FROM daily_summary
             WHERE date >= ?1 AND date <= ?2
             GROUP BY process_name
-            ORDER BY total DESC
+            ORDER BY total_duration DESC
             LIMIT ?3
             "#,
         )?;
-        let results = stmt.query_map(params![month_start, month_end, limit], |row| {
-            Ok((row.get(0)?, row.get(1)?))
-        })?;
+
+        let results =
+            stmt.query_map(params![month_start, month_end, limit], |row| Ok((row.get(0)?, row.get(1)?)))?;
+
         results.collect()
     }
 
-    pub fn get_month_daily_stats(
-        &self,
-        month_start: &str,
-        month_end: &str,
-    ) -> Result<Vec<DateStats>> {
+    pub fn get_month_daily_stats(&self, month_start: &str, month_end: &str) -> Result<Vec<DateStats>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT date, SUM(duration_seconds) as total
+            SELECT date, SUM(duration_seconds) as total_duration
             FROM daily_summary
             WHERE date >= ?1 AND date <= ?2
             GROUP BY date
             ORDER BY date ASC
             "#,
         )?;
+
         let results = stmt.query_map(params![month_start, month_end], |row| {
             Ok(DateStats {
                 date: row.get(0)?,
                 total_duration: row.get(1)?,
             })
         })?;
+
         results.collect()
     }
 
-    pub fn get_previous_month_stats(&self) -> Result<DateStats> {
-        let today = Local::now().date_naive();
-        let prev_month = if today.month() == 1 {
-            NaiveDate::from_ymd_opt(today.year() - 1, 12, 1).unwrap()
-        } else {
-            NaiveDate::from_ymd_opt(today.year(), today.month() - 1, 1).unwrap()
-        };
-        let prev_month_end = NaiveDate::from_ymd_opt(today.year(), today.month(), 1).unwrap()
-            - chrono::Duration::days(1);
+    pub fn get_date_range_stats(&self, start_date: &str, end_date: &str) -> Result<Vec<DateStats>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT date, SUM(duration_seconds) as total_duration
+            FROM daily_summary
+            WHERE date >= ?1 AND date <= ?2
+            GROUP BY date
+            ORDER BY date ASC
+            "#,
+        )?;
 
-        let month_start_str = prev_month.format("%Y-%m-%d").to_string();
-        let month_end_str = prev_month_end.format("%Y-%m-%d").to_string();
+        let results = stmt.query_map(params![start_date, end_date], |row| {
+            Ok(DateStats {
+                date: row.get(0)?,
+                total_duration: row.get(1)?,
+            })
+        })?;
 
+        results.collect()
+    }
+
+    fn get_date_range_total(&self, start_date: String, end_date: String) -> Result<i64> {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT COALESCE(SUM(duration_seconds), 0)
@@ -782,43 +936,41 @@ impl Database {
             WHERE date >= ?1 AND date <= ?2
             "#,
         )?;
-        let total: i64 =
-            stmt.query_row(params![month_start_str, month_end_str], |row| row.get(0))?;
 
-        Ok(DateStats {
-            date: month_start_str,
-            total_duration: total,
-        })
+        let result: i64 = stmt.query_row(params![start_date, end_date], |row| row.get(0))?;
+        Ok(result)
     }
 
-    pub fn get_date_range_stats(&self, start_date: &str, end_date: &str) -> Result<Vec<DateStats>> {
-        let mut stmt = self.conn.prepare(
-            r#"
-            SELECT date, SUM(duration_seconds) as total
-            FROM daily_summary
-            WHERE date >= ?1 AND date <= ?2
-            GROUP BY date
-            ORDER BY date ASC
-            "#,
-        )?;
-        let results = stmt.query_map(params![start_date, end_date], |row| {
-            Ok(DateStats {
-                date: row.get(0)?,
-                total_duration: row.get(1)?,
-            })
-        })?;
-        results.collect()
+    fn format_datetime(dt: &NaiveDateTime) -> String {
+        dt.format("%Y-%m-%dT%H:%M:%S").to_string()
     }
-}
 
-mod dirs {
-    use std::path::PathBuf;
+    pub fn get_update_info(&self) -> Result<(Option<String>, Option<String>)> {
+        let result: Result<(Option<String>, Option<String>), _> = self.conn.query_row(
+            "SELECT skip_version, last_check FROM update_info WHERE id = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        );
 
-    pub fn data_local_dir() -> Option<PathBuf> {
-        if let Ok(appdata) = std::env::var("LOCALAPPDATA") {
-            Some(PathBuf::from(appdata))
-        } else {
-            None
+        match result {
+            Ok(info) => Ok(info),
+            Err(_) => Ok((None, None)),
         }
+    }
+
+    pub fn set_skip_version(&self, version: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE update_info SET skip_version = ?1 WHERE id = 1",
+            params![version],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_last_check_time(&self, time: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE update_info SET last_check = ?1 WHERE id = 1",
+            params![time],
+        )?;
+        Ok(())
     }
 }
