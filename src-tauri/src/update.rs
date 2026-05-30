@@ -10,16 +10,16 @@ pub fn get_app_data_dir() -> PathBuf {
         .join("ScreenTime")
 }
 
-pub fn ensure_app_data_dir() -> Result<PathBuf, String> {
+pub fn _ensure_app_data_dir() -> Result<PathBuf, String> {
     let dir = get_app_data_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir)
 }
 
-pub fn get_config_path() -> PathBuf {
+pub fn _get_config_path() -> PathBuf {
     get_app_data_dir().join("config.json")
 }
 
-pub fn get_categories_path() -> PathBuf {
+pub fn _get_categories_path() -> PathBuf {
     get_app_data_dir().join("categories.json")
 }

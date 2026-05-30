@@ -14,6 +14,26 @@ function Daily() {
   const [viewMode, setViewMode] = useState<'apps' | 'categories'>('apps')
 
   useEffect(() => {
+    const today = getTodayDate()
+    if (selectedDate !== today) {
+      setSelectedDate(today)
+    }
+  }, [])
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        const today = getTodayDate()
+        if (selectedDate !== today) {
+          setSelectedDate(today)
+        }
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
+  }, [selectedDate])
+
+  useEffect(() => {
     loadData()
   }, [selectedDate])
 

@@ -1,4 +1,4 @@
-use chrono::Local;
+//use chrono::Local;
 use tauri::{
     menu::{CheckMenuItem, Menu, MenuItem},
     tray::{TrayIcon, TrayIconBuilder, TrayIconEvent},
@@ -6,7 +6,7 @@ use tauri::{
 };
 
 use crate::autostart;
-use crate::database::{Database, UsageRecord};
+//use crate::database::{Database, UsageRecord};
 
 pub fn create_tray(app: &AppHandle) -> Result<TrayIcon, tauri::Error> {
     let menu = build_menu(app)?;

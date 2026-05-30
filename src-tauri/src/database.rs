@@ -16,7 +16,7 @@ pub struct UsageRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DailySummary {
+pub struct _DailySummary {
     pub id: i64,
     pub date: String,
     pub process_name: String,
@@ -231,7 +231,7 @@ impl Database {
         Ok(())
     }
 
-    pub fn get_schema_version_current(&self) -> Result<i32> {
+    pub fn _get_schema_version_current(&self) -> Result<i32> {
         Self::get_schema_version(&self.conn)
     }
 
@@ -562,6 +562,33 @@ impl Database {
             params![date_str, start_str, end_str],
         )?;
 
+        Ok(())
+    }
+
+    pub fn generate_missing_daily_summaries(&self, days: i64) -> Result<()> {
+        let today = Local::now().date_naive();
+        for i in 1..=days {
+            let date = today - chrono::Duration::days(i);
+            let date_str = date.format("%Y-%m-%d").to_string();
+            let mut stmt = self.conn.prepare(
+                "SELECT COUNT(*) FROM daily_summary WHERE date = ?1",
+            )?;
+            let count: i64 = stmt.query_row(params![date_str], |row| row.get(0))?;
+            if count == 0 {
+                let mut check_stmt = self.conn.prepare(
+                    "SELECT COUNT(*) FROM usage_records WHERE start_time >= ?1 AND start_time <= ?2",
+                )?;
+                let start = date.and_hms_opt(0, 0, 0).unwrap();
+                let end = date.and_hms_opt(23, 59, 59).unwrap();
+                let start_str = Self::format_datetime(&start);
+                let end_str = Self::format_datetime(&end);
+                let has_data: i64 = check_stmt.query_row(params![start_str, end_str], |row| row.get(0))?;
+                if has_data > 0 {
+                    self.generate_daily_summary(&date)?;
+                    eprintln!("[Database] Generated missing summary for {}", date_str);
+                }
+            }
+        }
         Ok(())
     }
 
@@ -945,7 +972,7 @@ impl Database {
         dt.format("%Y-%m-%dT%H:%M:%S").to_string()
     }
 
-    pub fn get_update_info(&self) -> Result<(Option<String>, Option<String>)> {
+    pub fn _get_update_info(&self) -> Result<(Option<String>, Option<String>)> {
         let result: Result<(Option<String>, Option<String>), _> = self.conn.query_row(
             "SELECT skip_version, last_check FROM update_info WHERE id = 1",
             [],
@@ -958,7 +985,7 @@ impl Database {
         }
     }
 
-    pub fn set_skip_version(&self, version: &str) -> Result<()> {
+    pub fn _set_skip_version(&self, version: &str) -> Result<()> {
         self.conn.execute(
             "UPDATE update_info SET skip_version = ?1 WHERE id = 1",
             params![version],
@@ -966,7 +993,7 @@ impl Database {
         Ok(())
     }
 
-    pub fn set_last_check_time(&self, time: &str) -> Result<()> {
+    pub fn _set_last_check_time(&self, time: &str) -> Result<()> {
         self.conn.execute(
             "UPDATE update_info SET last_check = ?1 WHERE id = 1",
             params![time],

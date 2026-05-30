@@ -1,9 +1,11 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use chrono::Local;
 use std::sync::{Arc, Mutex};
 use tauri::{async_runtime, Manager};
 
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-use tauri_plugin_updater::UpdaterExt;
+//#[cfg(not(any(target_os = "android", target_os = "ios")))]
+//use tauri_plugin_updater::UpdaterExt;
 
 mod autostart;
 mod database;
@@ -182,6 +184,7 @@ fn get_data_path() -> String {
     update::get_app_data_dir().to_string_lossy().to_string()
 }
 
+
 fn main() {
     let db = Database::new().expect("Failed to create database");
     db.repair_abnormal_records().ok();
@@ -255,6 +258,13 @@ fn main() {
         .manage(monitor_state)
         .setup(|app| {
             create_tray(app.handle())?;
+
+            let state = app.state::<Arc<Mutex<MonitorState>>>();
+            let db = &state.lock().unwrap().db;
+            if let Err(e) = db.lock().unwrap().generate_missing_daily_summaries(7) {
+                eprintln!("[Setup] Failed to generate missing daily summaries: {}", e);
+            }
+
             Ok(())
         })
         .on_window_event(|window, event| {

@@ -1,0 +1,11 @@
+{
+  "version": "1.0.0",
+  "notes": "v1.0.0 正式版本发布\n\n主要变更：\n1. 将项目版本升级至1.0.0\n2. 修复窗口空闲时间检测逻辑，修正LASTINPUTINFO字段名\n3. 添加自动更新功能，延迟2秒启动检查更新\n4. 新增生成缺失日报统计的方法\n5. 优化布局样式，添加sticky侧边栏与满高容器\n6. 清理vite缓存依赖文件，重构前端资源导入路径\n7. 修复日期格式化逻辑，使用本地日期字符串替代ISO格式\n8. 新增页面可见时自动同步选中日期为今日的逻辑\n9. 注释部分数据库与托盘相关的临时代码",
+  "pub_date": "2026-05-31",
+  "platforms": {
+    "windows-x86_64": {
+      "url": "https://github.com/tsglz/ScreenManager/releases/download/v1.0.0/ScreenManager_1.0.0_x64-setup.exe",
+      "signature": "https://github.com/tsglz/ScreenManager/releases/download/v1.0.0/ScreenManager_1.0.0_x64-setup.exe.sig"
+    }
+  }
+}

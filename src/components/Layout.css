@@ -7,4 +7,5 @@
   flex: 1;
   background: #f5f7fa;
   overflow-y: auto;
+  height: 100vh;
 }

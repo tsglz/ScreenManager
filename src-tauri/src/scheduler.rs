@@ -23,7 +23,7 @@ pub async fn start_scheduler(db: Arc<Mutex<Database>>) {
             eprintln!("[Scheduler] Generating daily summary for {}", yesterday);
 
             let db_clone = Arc::clone(&db);
-            let yesterday_str = yesterday.format("%Y-%m-%d").to_string();
+            let _yesterday_str = yesterday.format("%Y-%m-%d").to_string();
             tokio::task::spawn_blocking(move || {
                 let db = db_clone.lock().unwrap();
                 match db.generate_daily_summary(&yesterday) {
@@ -37,7 +37,7 @@ pub async fn start_scheduler(db: Arc<Mutex<Database>>) {
     });
 }
 
-pub fn calculate_midnight_duration() -> Duration {
+pub fn _calculate_midnight_duration() -> Duration {
     let now = Local::now();
     let midnight = now.date_naive() + chrono::Duration::days(1);
     let midnight_dt = midnight.and_hms_opt(0, 0, 0).unwrap();
