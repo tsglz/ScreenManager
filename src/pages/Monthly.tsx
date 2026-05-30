@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, PieChart, Pie } from 'recharts'
 import Header from '../components/Header'
-import { api, DateStats } from '../utils/api'
+import { api, DateStats, CategoryStats } from '../utils/api'
 import { formatDuration, getMonthStart, getMonthEnd, formatFullDate } from '../utils/format'
 import './Monthly.css'
 
@@ -12,7 +12,9 @@ function Monthly() {
   const [monthStats, setMonthStats] = useState<DateStats | null>(null)
   const [topApps, setTopApps] = useState<[string, number][]>([])
   const [dailyStats, setDailyStats] = useState<DateStats[]>([])
+  const [categoryStats, setCategoryStats] = useState<CategoryStats[]>([])
   const [monthRange, setMonthRange] = useState({ start: '', end: '' })
+  const [viewMode, setViewMode] = useState<'apps' | 'categories'>('apps')
 
   useEffect(() => {
     loadData()
@@ -39,12 +41,14 @@ function Monthly() {
       setMonthStats(stats)
       setMonthRange({ start, end })
 
-      const [apps, daily] = await Promise.all([
+      const [apps, daily, categories] = await Promise.all([
         api.getMonthTopApps(start, end, 10),
         api.getMonthDailyStats(start, end),
+        api.getMonthCategoryStats(start, end),
       ])
       setTopApps(apps)
       setDailyStats(daily)
+      setCategoryStats(categories)
     } catch (error) {
       console.error('Failed to load data:', error)
     }
@@ -55,6 +59,15 @@ function Monthly() {
   }
 
   const colors = ['#4fc3f7', '#81c784', '#fff176', '#ffb74d', '#ce93d8', '#90caf9', '#a5d6a7', '#fff59d', '#ffcc80', '#f48fb1']
+  const categoryColors: Record<string, string> = {
+    '开发工具': '#4fc3f7',
+    '浏览器': '#81c784',
+    '社交通讯': '#fff176',
+    '游戏娱乐': '#ffb74d',
+    '办公工具': '#ce93d8',
+    '系统工具': '#90caf9',
+    '其他': '#b0bec5',
+  }
 
   const chartData = dailyStats.map((stat) => {
     const date = new Date(stat.date)
@@ -64,13 +77,25 @@ function Monthly() {
     }
   })
 
-  const pieData = topApps.map(([name, value], index) => ({
+  const appPieData = topApps.map(([name, value], index) => ({
     name,
     value,
     fill: colors[index % colors.length],
   }))
 
+  const categoryPieData = categoryStats.map((cat) => ({
+    name: cat.category_name,
+    value: cat.duration_seconds,
+    fill: categoryColors[cat.category_name] || '#b0bec5',
+  }))
+
   const totalApps = topApps.reduce((sum, [, duration]) => sum + duration, 0)
+  const totalCategories = categoryStats.reduce((sum, cat) => sum + cat.duration_seconds, 0)
+
+  const currentList = viewMode === 'apps' ? topApps : categoryStats
+  const currentTotal = viewMode === 'apps' ? totalApps : totalCategories
+  const currentPieData = viewMode === 'apps' ? appPieData : categoryPieData
+  const maxDuration = viewMode === 'apps' ? (topApps[0]?.[1] || 1) : (categoryStats[0]?.duration_seconds || 1)
 
   return (
     <div className="monthly-page">
@@ -131,12 +156,28 @@ function Monthly() {
           </div>
 
           <div className="chart-card">
-            <h3>应用占比</h3>
-            {pieData.length > 0 ? (
+            <div className="card-header">
+              <h3>{viewMode === 'apps' ? '应用占比' : '分类占比'}</h3>
+              <div className="view-toggle">
+                <button
+                  className={`toggle-btn ${viewMode === 'apps' ? 'active' : ''}`}
+                  onClick={() => setViewMode('apps')}
+                >
+                  应用
+                </button>
+                <button
+                  className={`toggle-btn ${viewMode === 'categories' ? 'active' : ''}`}
+                  onClick={() => setViewMode('categories')}
+                >
+                  分类
+                </button>
+              </div>
+            </div>
+            {currentPieData.length > 0 ? (
               <ResponsiveContainer width="100%" height={200}>
                 <PieChart>
                   <Pie
-                    data={pieData}
+                    data={currentPieData}
                     dataKey="value"
                     nameKey="name"
                     cx="50%"
@@ -145,7 +186,7 @@ function Monthly() {
                     outerRadius={80}
                     paddingAngle={2}
                   >
-                    {pieData.map((entry, index) => (
+                    {currentPieData.map((entry, index) => (
                       <Cell key={index} fill={entry.fill} />
                     ))}
                   </Pie>
@@ -159,34 +200,41 @@ function Monthly() {
         </div>
 
         <div className="chart-card full-width">
-          <h3>Top 10 应用</h3>
-          {topApps.length > 0 ? (
+          <h3>Top 10 {viewMode === 'apps' ? '应用' : '分类'}</h3>
+          {currentList.length > 0 ? (
             <div className="apps-list">
-              {topApps.map(([app, duration], index) => (
-                <div key={index} className="app-item">
-                  <div className="app-rank" style={{ backgroundColor: colors[index % colors.length] }}>
-                    {index + 1}
-                  </div>
-                  <div className="app-info">
-                    <span className="app-name">{app}</span>
-                    <div className="app-bar-container">
-                      <div
-                        className="app-bar"
-                        style={{
-                          width: `${(duration / topApps[0][1]) * 100}%`,
-                          backgroundColor: colors[index % colors.length],
-                        }}
-                      />
+              {currentList.map((item, index) => {
+                const name = viewMode === 'apps' ? (item as [string, number])[0] : (item as CategoryStats).category_name
+                const duration = viewMode === 'apps' ? (item as [string, number])[1] : (item as CategoryStats).duration_seconds
+                const fill = viewMode === 'apps'
+                  ? colors[index % colors.length]
+                  : categoryColors[(item as CategoryStats).category_name] || '#b0bec5'
+                return (
+                  <div key={index} className="app-item">
+                    <div className="app-rank" style={{ backgroundColor: fill }}>
+                      {index + 1}
+                    </div>
+                    <div className="app-info">
+                      <span className="app-name">{name}</span>
+                      <div className="app-bar-container">
+                        <div
+                          className="app-bar"
+                          style={{
+                            width: `${(duration / maxDuration) * 100}%`,
+                            backgroundColor: fill,
+                          }}
+                        />
+                      </div>
+                    </div>
+                    <div className="app-stats">
+                      <span className="app-duration">{formatDuration(duration)}</span>
+                      <span className="app-percent">
+                        {currentTotal > 0 ? ((duration / currentTotal) * 100).toFixed(1) : 0}%
+                      </span>
                     </div>
                   </div>
-                  <div className="app-stats">
-                    <span className="app-duration">{formatDuration(duration)}</span>
-                    <span className="app-percent">
-                      {totalApps > 0 ? ((duration / totalApps) * 100).toFixed(1) : 0}%
-                    </span>
-                  </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           ) : (
             <div className="empty-state">暂无数据</div>

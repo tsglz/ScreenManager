@@ -1,8 +1,8 @@
-pub mod database;
-pub mod window_monitor;
 pub mod autostart;
-pub mod tray;
+pub mod database;
 pub mod scheduler;
+pub mod tray;
+pub mod window_monitor;
 
-pub use database::{UsageRecord, DailySummary, DateStats, WeekStats};
+pub use database::{CategoryStats, DailySummary, DateStats, UsageRecord, WeekStats};
 pub use window_monitor::WindowInfo;

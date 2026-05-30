@@ -20,6 +20,11 @@ export interface WeekStats {
   total_duration: number
 }
 
+export interface CategoryStats {
+  category_name: string
+  duration_seconds: number
+}
+
 export const api = {
   getTodayTotalDuration: () => invoke<number>('get_today_total_duration'),
 
@@ -61,4 +66,23 @@ export const api = {
 
   getDateRangeStats: (startDate: string, endDate: string) =>
     invoke<DateStats[]>('get_date_range_stats', { startDate, endDate }),
+
+  getAllCategories: () => invoke<[string, string][]>('get_all_categories'),
+
+  getCategoryForApp: (processName: string) => invoke<string>('get_category_for_app', { processName }),
+
+  setAppCategory: (processName: string, categoryName: string) =>
+    invoke<boolean>('set_app_category', { processName, categoryName }),
+
+  getTodayCategoryStats: () => invoke<CategoryStats[]>('get_today_category_stats'),
+
+  getDailyCategoryStats: (date: string) => invoke<CategoryStats[]>('get_daily_category_stats', { date }),
+
+  getWeekCategoryStats: (weekStart: string, weekEnd: string) =>
+    invoke<CategoryStats[]>('get_week_category_stats', { weekStart, weekEnd }),
+
+  getMonthCategoryStats: (monthStart: string, monthEnd: string) =>
+    invoke<CategoryStats[]>('get_month_category_stats', { monthStart, monthEnd }),
+
+  initDefaultCategories: () => invoke<boolean>('init_default_categories'),
 }

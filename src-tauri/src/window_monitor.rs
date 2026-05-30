@@ -29,7 +29,8 @@ extern "system" {
 
 #[link(name = "psapi")]
 extern "system" {
-    fn GetModuleBaseNameW(hProcess: isize, hModule: isize, lpBaseName: *mut u16, nSize: u32) -> u32;
+    fn GetModuleBaseNameW(hProcess: isize, hModule: isize, lpBaseName: *mut u16, nSize: u32)
+        -> u32;
 }
 
 const PROCESS_QUERY_INFORMATION: u32 = 0x0400;

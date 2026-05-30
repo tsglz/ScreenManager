@@ -12,9 +12,20 @@ const APP_NAME: &str = "ScreenManager";
 pub fn is_autostart_enabled() -> bool {
     unsafe {
         let mut hkey = HKEY_CURRENT_USER;
-        let path: Vec<u16> = RUN_KEY_PATH.encode_utf16().chain(std::iter::once(0)).collect();
+        let path: Vec<u16> = RUN_KEY_PATH
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
 
-        if RegOpenKeyExW(HKEY_CURRENT_USER, PCWSTR(path.as_ptr()), 0, KEY_ALL_ACCESS, &mut hkey).is_err() {
+        if RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            PCWSTR(path.as_ptr()),
+            0,
+            KEY_ALL_ACCESS,
+            &mut hkey,
+        )
+        .is_err()
+        {
             return false;
         }
 
@@ -45,7 +56,10 @@ pub fn enable_autostart() -> bool {
 
     unsafe {
         let mut hkey = HKEY_CURRENT_USER;
-        let path: Vec<u16> = RUN_KEY_PATH.encode_utf16().chain(std::iter::once(0)).collect();
+        let path: Vec<u16> = RUN_KEY_PATH
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
 
         if RegCreateKeyExW(
             HKEY_CURRENT_USER,
@@ -57,7 +71,9 @@ pub fn enable_autostart() -> bool {
             None,
             &mut hkey,
             None,
-        ).is_err() {
+        )
+        .is_err()
+        {
             return false;
         }
 
@@ -87,9 +103,20 @@ pub fn enable_autostart() -> bool {
 pub fn disable_autostart() -> bool {
     unsafe {
         let mut hkey = HKEY_CURRENT_USER;
-        let path: Vec<u16> = RUN_KEY_PATH.encode_utf16().chain(std::iter::once(0)).collect();
+        let path: Vec<u16> = RUN_KEY_PATH
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
 
-        if RegOpenKeyExW(HKEY_CURRENT_USER, PCWSTR(path.as_ptr()), 0, KEY_ALL_ACCESS, &mut hkey).is_err() {
+        if RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            PCWSTR(path.as_ptr()),
+            0,
+            KEY_ALL_ACCESS,
+            &mut hkey,
+        )
+        .is_err()
+        {
             return false;
         }
 

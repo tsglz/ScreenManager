@@ -1,24 +1,29 @@
 export function formatDuration(seconds: number): string {
-  if (seconds === 0) return '0m'
+  if (seconds === 0) return '0秒'
 
   const hours = Math.floor(seconds / 3600)
   const minutes = Math.floor((seconds % 3600) / 60)
+  const secs = seconds % 60
 
-  if (hours > 0) {
-    return `${hours}h ${minutes}m`
-  }
-  return `${minutes}m`
+  const parts: string[] = []
+  if (hours > 0) parts.push(`${hours}小时`)
+  if (minutes > 0) parts.push(`${minutes}分钟`)
+  if (secs > 0 || parts.length === 0) parts.push(`${secs}秒`)
+
+  return parts.join('')
 }
 
 export function formatDurationLong(seconds: number): string {
-  if (seconds === 0) return '0 分钟'
+  if (seconds === 0) return '0 秒'
 
   const hours = Math.floor(seconds / 3600)
   const minutes = Math.floor((seconds % 3600) / 60)
+  const secs = seconds % 60
 
   const parts: string[] = []
   if (hours > 0) parts.push(`${hours} 小时`)
   if (minutes > 0) parts.push(`${minutes} 分钟`)
+  if (secs > 0 || parts.length === 0) parts.push(`${secs} 秒`)
 
   return parts.join(' ')
 }
@@ -30,6 +35,7 @@ export function formatDateTime(dateStr: string): string {
     day: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
+    second: '2-digit',
   })
 }
 
@@ -98,18 +104,8 @@ export function getPreviousWeekStart(): string {
 export function getPreviousWeekEnd(): string {
   const now = new Date()
   const end = new Date(now)
-  end.setDate(now.getDate() - now.getDay() + 7 - 7)
+  end.setDate(now.getDate() - now.getDay())
   return end.toISOString().split('T')[0]
-}
-
-export function getPreviousMonthStart(): string {
-  const now = new Date()
-  return new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString().split('T')[0]
-}
-
-export function getPreviousMonthEnd(): string {
-  const now = new Date()
-  return new Date(now.getFullYear(), now.getMonth(), 0).toISOString().split('T')[0]
 }
 
 export function getDayNames(): string[] {

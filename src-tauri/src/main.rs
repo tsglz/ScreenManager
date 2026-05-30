@@ -1,17 +1,17 @@
 use chrono::Local;
 use std::sync::{Arc, Mutex};
-use tauri::async_runtime;
-
-use crate::database::{Database, DateStats, WeekStats, UsageRecord};
-use crate::scheduler::start_scheduler;
-use crate::tray::create_tray;
-use crate::window_monitor::{get_foreground_window_info, is_idle, WindowInfo};
+use tauri::{async_runtime, Manager};
 
 mod autostart;
 mod database;
 mod scheduler;
 mod tray;
 mod window_monitor;
+
+use database::{CategoryStats, Database, DateStats, UsageRecord, WeekStats};
+use scheduler::start_scheduler;
+use tray::{create_tray, hide_window_on_close};
+use window_monitor::{get_foreground_window_info, is_idle, WindowInfo};
 
 struct MonitorState {
     db: Arc<Mutex<Database>>,
@@ -21,22 +21,58 @@ struct MonitorState {
 
 #[tauri::command]
 fn get_today_total_duration(state: tauri::State<'_, Arc<Mutex<MonitorState>>>) -> i64 {
-    state.lock().unwrap().db.lock().unwrap().get_today_total_duration().unwrap_or(0)
+    state
+        .lock()
+        .unwrap()
+        .db
+        .lock()
+        .unwrap()
+        .get_today_total_duration()
+        .unwrap_or(0)
 }
 
 #[tauri::command]
-fn get_top_apps_today(state: tauri::State<'_, Arc<Mutex<MonitorState>>>, limit: usize) -> Vec<(String, i64)> {
-    state.lock().unwrap().db.lock().unwrap().get_top_apps_today(limit).unwrap_or_default()
+fn get_top_apps_today(
+    state: tauri::State<'_, Arc<Mutex<MonitorState>>>,
+    limit: usize,
+) -> Vec<(String, i64)> {
+    state
+        .lock()
+        .unwrap()
+        .db
+        .lock()
+        .unwrap()
+        .get_top_apps_today(limit)
+        .unwrap_or_default()
 }
 
 #[tauri::command]
-fn get_hourly_distribution_today(state: tauri::State<'_, Arc<Mutex<MonitorState>>>) -> Vec<(i32, i64)> {
-    state.lock().unwrap().db.lock().unwrap().get_hourly_distribution_today().unwrap_or_default()
+fn get_hourly_distribution_today(
+    state: tauri::State<'_, Arc<Mutex<MonitorState>>>,
+) -> Vec<(i32, i64)> {
+    state
+        .lock()
+        .unwrap()
+        .db
+        .lock()
+        .unwrap()
+        .get_hourly_distribution_today()
+        .unwrap_or_default()
 }
 
 #[tauri::command]
-fn get_recent_records(state: tauri::State<'_, Arc<Mutex<MonitorState>>>, limit: usize) -> Vec<UsageRecord> {
-    state.lock().unwrap().db.lock().unwrap().get_recent_records(limit).unwrap_or_default()
+fn get_recent_records(
+    state: tauri::State<'_, Arc<Mutex<MonitorState>>>,
+    limit: usize,
+) -> Vec<UsageRecord> {
+    state
+        .lock()
+        .unwrap()
+        .db
+        .lock()
+        .unwrap()
+        .get_recent_records(limit)
+        .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -55,80 +91,311 @@ fn set_autostart(enabled: bool) -> bool {
 
 #[tauri::command]
 fn get_daily_total(state: tauri::State<'_, Arc<Mutex<MonitorState>>>, date: String) -> i64 {
-    state.lock().unwrap().db.lock().unwrap().get_daily_total(&date).unwrap_or(0)
+    state
+        .lock()
+        .unwrap()
+        .db
+        .lock()
+        .unwrap()
+        .get_daily_total(&date)
+        .unwrap_or(0)
 }
 
 #[tauri::command]
-fn get_daily_top_apps(state: tauri::State<'_, Arc<Mutex<MonitorState>>>, date: String, limit: usize) -> Vec<(String, i64)> {
-    state.lock().unwrap().db.lock().unwrap().get_daily_top_apps(&date, limit).unwrap_or_default()
+fn get_daily_top_apps(
+    state: tauri::State<'_, Arc<Mutex<MonitorState>>>,
+    date: String,
+    limit: usize,
+) -> Vec<(String, i64)> {
+    state
+        .lock()
+        .unwrap()
+        .db
+        .lock()
+        .unwrap()
+        .get_daily_top_apps(&date, limit)
+        .unwrap_or_default()
 }
 
 #[tauri::command]
-fn get_daily_all_apps(state: tauri::State<'_, Arc<Mutex<MonitorState>>>, date: String) -> Vec<(String, i64)> {
-    state.lock().unwrap().db.lock().unwrap().get_daily_all_apps(&date).unwrap_or_default()
+fn get_daily_all_apps(
+    state: tauri::State<'_, Arc<Mutex<MonitorState>>>,
+    date: String,
+) -> Vec<(String, i64)> {
+    state
+        .lock()
+        .unwrap()
+        .db
+        .lock()
+        .unwrap()
+        .get_daily_all_apps(&date)
+        .unwrap_or_default()
 }
 
 #[tauri::command]
 fn get_current_week_stats(state: tauri::State<'_, Arc<Mutex<MonitorState>>>) -> WeekStats {
-    state.lock().unwrap().db.lock().unwrap().get_current_week_stats().unwrap_or(WeekStats {
-        week_start: String::new(),
-        week_end: String::new(),
-        total_duration: 0,
-    })
+    state
+        .lock()
+        .unwrap()
+        .db
+        .lock()
+        .unwrap()
+        .get_current_week_stats()
+        .unwrap_or(WeekStats {
+            week_start: String::new(),
+            week_end: String::new(),
+            total_duration: 0,
+        })
 }
 
 #[tauri::command]
 fn get_previous_week_stats(state: tauri::State<'_, Arc<Mutex<MonitorState>>>) -> WeekStats {
-    state.lock().unwrap().db.lock().unwrap().get_previous_week_stats().unwrap_or(WeekStats {
-        week_start: String::new(),
-        week_end: String::new(),
-        total_duration: 0,
-    })
+    state
+        .lock()
+        .unwrap()
+        .db
+        .lock()
+        .unwrap()
+        .get_previous_week_stats()
+        .unwrap_or(WeekStats {
+            week_start: String::new(),
+            week_end: String::new(),
+            total_duration: 0,
+        })
 }
 
 #[tauri::command]
-fn get_week_top_apps(state: tauri::State<'_, Arc<Mutex<MonitorState>>>, week_start: String, week_end: String, limit: usize) -> Vec<(String, i64)> {
-    state.lock().unwrap().db.lock().unwrap().get_week_top_apps(&week_start, &week_end, limit).unwrap_or_default()
+fn get_week_top_apps(
+    state: tauri::State<'_, Arc<Mutex<MonitorState>>>,
+    week_start: String,
+    week_end: String,
+    limit: usize,
+) -> Vec<(String, i64)> {
+    state
+        .lock()
+        .unwrap()
+        .db
+        .lock()
+        .unwrap()
+        .get_week_top_apps(&week_start, &week_end, limit)
+        .unwrap_or_default()
 }
 
 #[tauri::command]
-fn get_week_daily_stats(state: tauri::State<'_, Arc<Mutex<MonitorState>>>, week_start: String, week_end: String) -> Vec<DateStats> {
-    state.lock().unwrap().db.lock().unwrap().get_week_daily_stats(&week_start, &week_end).unwrap_or_default()
+fn get_week_daily_stats(
+    state: tauri::State<'_, Arc<Mutex<MonitorState>>>,
+    week_start: String,
+    week_end: String,
+) -> Vec<DateStats> {
+    state
+        .lock()
+        .unwrap()
+        .db
+        .lock()
+        .unwrap()
+        .get_week_daily_stats(&week_start, &week_end)
+        .unwrap_or_default()
 }
 
 #[tauri::command]
 fn get_current_month_stats(state: tauri::State<'_, Arc<Mutex<MonitorState>>>) -> DateStats {
-    state.lock().unwrap().db.lock().unwrap().get_current_month_stats().unwrap_or(DateStats {
-        date: String::new(),
-        total_duration: 0,
-    })
+    state
+        .lock()
+        .unwrap()
+        .db
+        .lock()
+        .unwrap()
+        .get_current_month_stats()
+        .unwrap_or(DateStats {
+            date: String::new(),
+            total_duration: 0,
+        })
 }
 
 #[tauri::command]
 fn get_previous_month_stats(state: tauri::State<'_, Arc<Mutex<MonitorState>>>) -> DateStats {
-    state.lock().unwrap().db.lock().unwrap().get_previous_month_stats().unwrap_or(DateStats {
-        date: String::new(),
-        total_duration: 0,
-    })
+    state
+        .lock()
+        .unwrap()
+        .db
+        .lock()
+        .unwrap()
+        .get_previous_month_stats()
+        .unwrap_or(DateStats {
+            date: String::new(),
+            total_duration: 0,
+        })
 }
 
 #[tauri::command]
-fn get_month_top_apps(state: tauri::State<'_, Arc<Mutex<MonitorState>>>, month_start: String, month_end: String, limit: usize) -> Vec<(String, i64)> {
-    state.lock().unwrap().db.lock().unwrap().get_month_top_apps(&month_start, &month_end, limit).unwrap_or_default()
+fn get_month_top_apps(
+    state: tauri::State<'_, Arc<Mutex<MonitorState>>>,
+    month_start: String,
+    month_end: String,
+    limit: usize,
+) -> Vec<(String, i64)> {
+    state
+        .lock()
+        .unwrap()
+        .db
+        .lock()
+        .unwrap()
+        .get_month_top_apps(&month_start, &month_end, limit)
+        .unwrap_or_default()
 }
 
 #[tauri::command]
-fn get_month_daily_stats(state: tauri::State<'_, Arc<Mutex<MonitorState>>>, month_start: String, month_end: String) -> Vec<DateStats> {
-    state.lock().unwrap().db.lock().unwrap().get_month_daily_stats(&month_start, &month_end).unwrap_or_default()
+fn get_month_daily_stats(
+    state: tauri::State<'_, Arc<Mutex<MonitorState>>>,
+    month_start: String,
+    month_end: String,
+) -> Vec<DateStats> {
+    state
+        .lock()
+        .unwrap()
+        .db
+        .lock()
+        .unwrap()
+        .get_month_daily_stats(&month_start, &month_end)
+        .unwrap_or_default()
 }
 
 #[tauri::command]
-fn get_date_range_stats(state: tauri::State<'_, Arc<Mutex<MonitorState>>>, start_date: String, end_date: String) -> Vec<DateStats> {
-    state.lock().unwrap().db.lock().unwrap().get_date_range_stats(&start_date, &end_date).unwrap_or_default()
+fn get_date_range_stats(
+    state: tauri::State<'_, Arc<Mutex<MonitorState>>>,
+    start_date: String,
+    end_date: String,
+) -> Vec<DateStats> {
+    state
+        .lock()
+        .unwrap()
+        .db
+        .lock()
+        .unwrap()
+        .get_date_range_stats(&start_date, &end_date)
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+fn get_all_categories(state: tauri::State<'_, Arc<Mutex<MonitorState>>>) -> Vec<(String, String)> {
+    state
+        .lock()
+        .unwrap()
+        .db
+        .lock()
+        .unwrap()
+        .get_all_categories()
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+fn get_category_for_app(
+    state: tauri::State<'_, Arc<Mutex<MonitorState>>>,
+    process_name: String,
+) -> String {
+    state
+        .lock()
+        .unwrap()
+        .db
+        .lock()
+        .unwrap()
+        .get_category_for_app(&process_name)
+        .unwrap_or_else(|_| "其他".to_string())
+}
+
+#[tauri::command]
+fn set_app_category(
+    state: tauri::State<'_, Arc<Mutex<MonitorState>>>,
+    process_name: String,
+    category_name: String,
+) -> bool {
+    state
+        .lock()
+        .unwrap()
+        .db
+        .lock()
+        .unwrap()
+        .set_app_category(&process_name, &category_name)
+        .is_ok()
+}
+
+#[tauri::command]
+fn get_today_category_stats(
+    state: tauri::State<'_, Arc<Mutex<MonitorState>>>,
+) -> Vec<CategoryStats> {
+    state
+        .lock()
+        .unwrap()
+        .db
+        .lock()
+        .unwrap()
+        .get_today_category_stats()
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+fn get_daily_category_stats(
+    state: tauri::State<'_, Arc<Mutex<MonitorState>>>,
+    date: String,
+) -> Vec<CategoryStats> {
+    state
+        .lock()
+        .unwrap()
+        .db
+        .lock()
+        .unwrap()
+        .get_daily_category_stats(&date)
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+fn get_week_category_stats(
+    state: tauri::State<'_, Arc<Mutex<MonitorState>>>,
+    week_start: String,
+    week_end: String,
+) -> Vec<CategoryStats> {
+    state
+        .lock()
+        .unwrap()
+        .db
+        .lock()
+        .unwrap()
+        .get_week_category_stats(&week_start, &week_end)
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+fn get_month_category_stats(
+    state: tauri::State<'_, Arc<Mutex<MonitorState>>>,
+    month_start: String,
+    month_end: String,
+) -> Vec<CategoryStats> {
+    state
+        .lock()
+        .unwrap()
+        .db
+        .lock()
+        .unwrap()
+        .get_month_category_stats(&month_start, &month_end)
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+fn init_default_categories(state: tauri::State<'_, Arc<Mutex<MonitorState>>>) -> bool {
+    state
+        .lock()
+        .unwrap()
+        .db
+        .lock()
+        .unwrap()
+        .init_default_categories()
+        .is_ok()
 }
 
 fn main() {
     let db = Database::new().expect("Failed to create database");
+    db.repair_abnormal_records().ok();
+    db.init_default_categories().ok();
     let db_arc = Arc::new(Mutex::new(db));
 
     let db_for_scheduler = Arc::clone(&db_arc);
@@ -166,8 +433,10 @@ fn main() {
                     match window_info_result {
                         Ok(window_info) => {
                             let should_save = match &state.current_window {
-                                Some(current) => current.process_name != window_info.process_name ||
-                                                 current.window_title != window_info.window_title,
+                                Some(current) => {
+                                    current.process_name != window_info.process_name
+                                        || current.window_title != window_info.window_title
+                                }
                                 None => true,
                             };
 
@@ -192,10 +461,17 @@ fn main() {
     });
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(monitor_state)
         .setup(|app| {
             create_tray(app.handle())?;
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                hide_window_on_close(window.app_handle());
+            }
         })
         .invoke_handler(tauri::generate_handler![
             get_today_total_duration,
@@ -215,7 +491,15 @@ fn main() {
             get_previous_month_stats,
             get_month_top_apps,
             get_month_daily_stats,
-            get_date_range_stats
+            get_date_range_stats,
+            get_all_categories,
+            get_category_for_app,
+            set_app_category,
+            get_today_category_stats,
+            get_daily_category_stats,
+            get_week_category_stats,
+            get_month_category_stats,
+            init_default_categories
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

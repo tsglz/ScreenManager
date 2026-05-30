@@ -34,6 +34,12 @@ pub struct WeekStats {
     pub total_duration: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CategoryStats {
+    pub category_name: String,
+    pub duration_seconds: i64,
+}
+
 pub struct Database {
     conn: Connection,
 }
@@ -45,11 +51,7 @@ impl Database {
             .join("ScreenManager");
 
         std::fs::create_dir_all(&app_dir).map_err(|e| {
-            rusqlite::Error::FromSqlConversionFailure(
-                0,
-                rusqlite::types::Type::Null,
-                Box::new(e),
-            )
+            rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Null, Box::new(e))
         })?;
 
         let db_path = app_dir.join("usage.db");
@@ -92,6 +94,17 @@ impl Database {
 
         conn.execute(
             r#"
+            CREATE TABLE IF NOT EXISTS app_categories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                process_name TEXT NOT NULL UNIQUE,
+                category_name TEXT NOT NULL
+            )
+            "#,
+            [],
+        )?;
+
+        conn.execute(
+            r#"
             CREATE INDEX IF NOT EXISTS idx_usage_records_start_time
             ON usage_records(start_time)
             "#,
@@ -106,11 +119,299 @@ impl Database {
             [],
         )?;
 
+        conn.execute(
+            r#"
+            CREATE INDEX IF NOT EXISTS idx_app_categories_process_name
+            ON app_categories(process_name)
+            "#,
+            [],
+        )?;
+
         Ok(())
     }
 
     fn format_datetime(dt: &NaiveDateTime) -> String {
         dt.format("%Y-%m-%dT%H:%M:%S").to_string()
+    }
+
+    pub fn repair_abnormal_records(&self) -> Result<()> {
+        self.conn.execute(
+            r#"
+            UPDATE usage_records
+            SET end_time = start_time,
+                duration_seconds = 0
+            WHERE end_time IS NULL OR end_time = '' OR duration_seconds < 0
+            "#,
+            [],
+        )?;
+        Ok(())
+    }
+
+    pub fn init_default_categories(&self) -> Result<()> {
+        let default_categories = vec![
+            ("chrome.exe", "浏览器"),
+            ("msedge.exe", "浏览器"),
+            ("firefox.exe", "浏览器"),
+            ("opera.exe", "浏览器"),
+            ("brave.exe", "浏览器"),
+            ("code.exe", "开发工具"),
+            ("idea64.exe", "开发工具"),
+            ("pycharm64.exe", "开发工具"),
+            ("webstorm64.exe", "开发工具"),
+            ("clion64.exe", "开发工具"),
+            ("rustrover.exe", "开发工具"),
+            ("devenv.exe", "开发工具"),
+            ("javaw.exe", "开发工具"),
+            ("node.exe", "开发工具"),
+            ("python.exe", "开发工具"),
+            ("wechat.exe", "社交通讯"),
+            ("qq.exe", "社交通讯"),
+            ("dingtalk.exe", "社交通讯"),
+            ("Feishu.exe", "社交通讯"),
+            ("lark.exe", "社交通讯"),
+            ("steam.exe", "游戏娱乐"),
+            ("EpicGamesLauncher.exe", "游戏娱乐"),
+            ("GenshinImpact.exe", "游戏娱乐"),
+            ("League of Legends.exe", "游戏娱乐"),
+            ("neteasegame.exe", "游戏娱乐"),
+            ("excel.exe", "办公工具"),
+            ("winword.exe", "办公工具"),
+            ("powerpnt.exe", "办公工具"),
+            ("WPSOffice.exe", "办公工具"),
+            ("wps.exe", "办公工具"),
+            ("notion.exe", "办公工具"),
+            ("obsidian.exe", "办公工具"),
+            ("evernote.exe", "办公工具"),
+            ("Taskmgr.exe", "系统工具"),
+            ("explorer.exe", "系统工具"),
+            ("cmd.exe", "系统工具"),
+            ("powershell.exe", "系统工具"),
+            ("conhost.exe", "系统工具"),
+            ("RuntimeBroker.exe", "系统工具"),
+            ("svchost.exe", "系统工具"),
+            ("SystemSettings.exe", "系统工具"),
+        ];
+
+        for (process_name, category_name) in default_categories {
+            self.conn.execute(
+                r#"
+                INSERT OR IGNORE INTO app_categories (process_name, category_name)
+                VALUES (?1, ?2)
+                "#,
+                params![process_name, category_name],
+            )?;
+        }
+
+        Ok(())
+    }
+
+    pub fn get_all_categories(&self) -> Result<Vec<(String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT process_name, category_name FROM app_categories ORDER BY category_name, process_name",
+        )?;
+        let results = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        results.collect()
+    }
+
+    pub fn get_category_for_app(&self, process_name: &str) -> Result<String> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT category_name FROM app_categories WHERE process_name = ?1")?;
+        let result: String = stmt.query_row(params![process_name], |row| row.get(0))?;
+        Ok(result)
+    }
+
+    pub fn set_app_category(&self, process_name: &str, category_name: &str) -> Result<()> {
+        self.conn.execute(
+            r#"
+            INSERT OR REPLACE INTO app_categories (process_name, category_name)
+            VALUES (?1, ?2)
+            "#,
+            params![process_name, category_name],
+        )?;
+        Ok(())
+    }
+
+    fn get_app_category_map(&self) -> std::collections::HashMap<String, String> {
+        let mut map = std::collections::HashMap::new();
+        if let Ok(categories) = self.get_all_categories() {
+            for (process_name, category_name) in categories {
+                map.insert(process_name.to_lowercase(), category_name);
+            }
+        }
+        map
+    }
+
+    pub fn get_today_category_stats(&self) -> Result<Vec<CategoryStats>> {
+        let today = Local::now().date_naive();
+        let start_of_day = today.and_hms_opt(0, 0, 0).unwrap();
+        let end_of_day = today.and_hms_opt(23, 59, 59).unwrap();
+
+        let start_str = Self::format_datetime(&start_of_day);
+        let end_str = Self::format_datetime(&end_of_day);
+
+        let category_map = self.get_app_category_map();
+
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT process_name, SUM(duration_seconds) as total
+            FROM usage_records
+            WHERE start_time >= ?1 AND start_time <= ?2
+            GROUP BY process_name
+            "#,
+        )?;
+
+        let mut category_totals: std::collections::HashMap<String, i64> =
+            std::collections::HashMap::new();
+        let mut results = stmt.query(params![start_str, end_str])?;
+
+        while let Some(row) = results.next()? {
+            let process_name: String = row.get(0)?;
+            let duration: i64 = row.get(1)?;
+            let category = category_map
+                .get(&process_name.to_lowercase())
+                .cloned()
+                .unwrap_or_else(|| "其他".to_string());
+            *category_totals.entry(category).or_insert(0) += duration;
+        }
+
+        let mut stats: Vec<CategoryStats> = category_totals
+            .into_iter()
+            .map(|(category_name, duration_seconds)| CategoryStats {
+                category_name,
+                duration_seconds,
+            })
+            .collect();
+        stats.sort_by(|a, b| b.duration_seconds.cmp(&a.duration_seconds));
+        Ok(stats)
+    }
+
+    pub fn get_daily_category_stats(&self, date: &str) -> Result<Vec<CategoryStats>> {
+        let date_obj = NaiveDate::parse_from_str(date, "%Y-%m-%d").map_err(|_| {
+            rusqlite::Error::InvalidParameterName("Invalid date format".to_string())
+        })?;
+        let start_of_day = date_obj.and_hms_opt(0, 0, 0).unwrap();
+        let end_of_day = date_obj.and_hms_opt(23, 59, 59).unwrap();
+
+        let start_str = Self::format_datetime(&start_of_day);
+        let end_str = Self::format_datetime(&end_of_day);
+
+        let category_map = self.get_app_category_map();
+
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT process_name, SUM(duration_seconds) as total
+            FROM usage_records
+            WHERE start_time >= ?1 AND start_time <= ?2
+            GROUP BY process_name
+            "#,
+        )?;
+
+        let mut category_totals: std::collections::HashMap<String, i64> =
+            std::collections::HashMap::new();
+        let mut results = stmt.query(params![start_str, end_str])?;
+
+        while let Some(row) = results.next()? {
+            let process_name: String = row.get(0)?;
+            let duration: i64 = row.get(1)?;
+            let category = category_map
+                .get(&process_name.to_lowercase())
+                .cloned()
+                .unwrap_or_else(|| "其他".to_string());
+            *category_totals.entry(category).or_insert(0) += duration;
+        }
+
+        let mut stats: Vec<CategoryStats> = category_totals
+            .into_iter()
+            .map(|(category_name, duration_seconds)| CategoryStats {
+                category_name,
+                duration_seconds,
+            })
+            .collect();
+        stats.sort_by(|a, b| b.duration_seconds.cmp(&a.duration_seconds));
+        Ok(stats)
+    }
+
+    pub fn get_week_category_stats(
+        &self,
+        week_start: &str,
+        week_end: &str,
+    ) -> Result<Vec<CategoryStats>> {
+        let category_map = self.get_app_category_map();
+
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT process_name, SUM(duration_seconds) as total
+            FROM daily_summary
+            WHERE date >= ?1 AND date <= ?2
+            GROUP BY process_name
+            "#,
+        )?;
+
+        let mut category_totals: std::collections::HashMap<String, i64> =
+            std::collections::HashMap::new();
+        let mut results = stmt.query(params![week_start, week_end])?;
+
+        while let Some(row) = results.next()? {
+            let process_name: String = row.get(0)?;
+            let duration: i64 = row.get(1)?;
+            let category = category_map
+                .get(&process_name.to_lowercase())
+                .cloned()
+                .unwrap_or_else(|| "其他".to_string());
+            *category_totals.entry(category).or_insert(0) += duration;
+        }
+
+        let mut stats: Vec<CategoryStats> = category_totals
+            .into_iter()
+            .map(|(category_name, duration_seconds)| CategoryStats {
+                category_name,
+                duration_seconds,
+            })
+            .collect();
+        stats.sort_by(|a, b| b.duration_seconds.cmp(&a.duration_seconds));
+        Ok(stats)
+    }
+
+    pub fn get_month_category_stats(
+        &self,
+        month_start: &str,
+        month_end: &str,
+    ) -> Result<Vec<CategoryStats>> {
+        let category_map = self.get_app_category_map();
+
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT process_name, SUM(duration_seconds) as total
+            FROM daily_summary
+            WHERE date >= ?1 AND date <= ?2
+            GROUP BY process_name
+            "#,
+        )?;
+
+        let mut category_totals: std::collections::HashMap<String, i64> =
+            std::collections::HashMap::new();
+        let mut results = stmt.query(params![month_start, month_end])?;
+
+        while let Some(row) = results.next()? {
+            let process_name: String = row.get(0)?;
+            let duration: i64 = row.get(1)?;
+            let category = category_map
+                .get(&process_name.to_lowercase())
+                .cloned()
+                .unwrap_or_else(|| "其他".to_string());
+            *category_totals.entry(category).or_insert(0) += duration;
+        }
+
+        let mut stats: Vec<CategoryStats> = category_totals
+            .into_iter()
+            .map(|(category_name, duration_seconds)| CategoryStats {
+                category_name,
+                duration_seconds,
+            })
+            .collect();
+        stats.sort_by(|a, b| b.duration_seconds.cmp(&a.duration_seconds));
+        Ok(stats)
     }
 
     pub fn insert_record(&self, record: &UsageRecord) -> Result<i64> {
@@ -278,9 +579,7 @@ impl Database {
             LIMIT ?2
             "#,
         )?;
-        let results = stmt.query_map(params![date, limit], |row| {
-            Ok((row.get(0)?, row.get(1)?))
-        })?;
+        let results = stmt.query_map(params![date, limit], |row| Ok((row.get(0)?, row.get(1)?)))?;
         results.collect()
     }
 
@@ -293,15 +592,14 @@ impl Database {
             ORDER BY duration_seconds DESC
             "#,
         )?;
-        let results = stmt.query_map(params![date], |row| {
-            Ok((row.get(0)?, row.get(1)?))
-        })?;
+        let results = stmt.query_map(params![date], |row| Ok((row.get(0)?, row.get(1)?)))?;
         results.collect()
     }
 
     pub fn get_current_week_stats(&self) -> Result<WeekStats> {
         let today = Local::now().date_naive();
-        let week_start = today - chrono::Duration::days(today.weekday().num_days_from_monday() as i64);
+        let week_start =
+            today - chrono::Duration::days(today.weekday().num_days_from_monday() as i64);
         let week_end = week_start + chrono::Duration::days(6);
 
         let week_start_str = week_start.format("%Y-%m-%d").to_string();
@@ -323,7 +621,12 @@ impl Database {
         })
     }
 
-    pub fn get_week_top_apps(&self, week_start: &str, week_end: &str, limit: usize) -> Result<Vec<(String, i64)>> {
+    pub fn get_week_top_apps(
+        &self,
+        week_start: &str,
+        week_end: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, i64)>> {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT process_name, SUM(duration_seconds) as total
@@ -361,7 +664,8 @@ impl Database {
 
     pub fn get_previous_week_stats(&self) -> Result<WeekStats> {
         let today = Local::now().date_naive();
-        let current_week_start = today - chrono::Duration::days(today.weekday().num_days_from_monday() as i64);
+        let current_week_start =
+            today - chrono::Duration::days(today.weekday().num_days_from_monday() as i64);
         let prev_week_end = current_week_start - chrono::Duration::days(1);
         let prev_week_start = prev_week_end - chrono::Duration::days(6);
 
@@ -390,7 +694,8 @@ impl Database {
         let month_end = if today.month() == 12 {
             NaiveDate::from_ymd_opt(today.year() + 1, 1, 1).unwrap() - chrono::Duration::days(1)
         } else {
-            NaiveDate::from_ymd_opt(today.year(), today.month() + 1, 1).unwrap() - chrono::Duration::days(1)
+            NaiveDate::from_ymd_opt(today.year(), today.month() + 1, 1).unwrap()
+                - chrono::Duration::days(1)
         };
 
         let month_start_str = month_start.format("%Y-%m-%d").to_string();
@@ -403,7 +708,8 @@ impl Database {
             WHERE date >= ?1 AND date <= ?2
             "#,
         )?;
-        let total: i64 = stmt.query_row(params![month_start_str, month_end_str], |row| row.get(0))?;
+        let total: i64 =
+            stmt.query_row(params![month_start_str, month_end_str], |row| row.get(0))?;
 
         Ok(DateStats {
             date: month_start_str,
@@ -411,7 +717,12 @@ impl Database {
         })
     }
 
-    pub fn get_month_top_apps(&self, month_start: &str, month_end: &str, limit: usize) -> Result<Vec<(String, i64)>> {
+    pub fn get_month_top_apps(
+        &self,
+        month_start: &str,
+        month_end: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, i64)>> {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT process_name, SUM(duration_seconds) as total
@@ -428,7 +739,11 @@ impl Database {
         results.collect()
     }
 
-    pub fn get_month_daily_stats(&self, month_start: &str, month_end: &str) -> Result<Vec<DateStats>> {
+    pub fn get_month_daily_stats(
+        &self,
+        month_start: &str,
+        month_end: &str,
+    ) -> Result<Vec<DateStats>> {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT date, SUM(duration_seconds) as total
@@ -454,7 +769,8 @@ impl Database {
         } else {
             NaiveDate::from_ymd_opt(today.year(), today.month() - 1, 1).unwrap()
         };
-        let prev_month_end = NaiveDate::from_ymd_opt(today.year(), today.month(), 1).unwrap() - chrono::Duration::days(1);
+        let prev_month_end = NaiveDate::from_ymd_opt(today.year(), today.month(), 1).unwrap()
+            - chrono::Duration::days(1);
 
         let month_start_str = prev_month.format("%Y-%m-%d").to_string();
         let month_end_str = prev_month_end.format("%Y-%m-%d").to_string();
@@ -466,7 +782,8 @@ impl Database {
             WHERE date >= ?1 AND date <= ?2
             "#,
         )?;
-        let total: i64 = stmt.query_row(params![month_start_str, month_end_str], |row| row.get(0))?;
+        let total: i64 =
+            stmt.query_row(params![month_start_str, month_end_str], |row| row.get(0))?;
 
         Ok(DateStats {
             date: month_start_str,

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, PieChart, Pie } from 'recharts'
 import Header from '../components/Header'
-import { api, UsageRecord } from '../utils/api'
+import { api, UsageRecord, CategoryStats } from '../utils/api'
 import { formatDuration, formatDateTime } from '../utils/format'
 import './Dashboard.css'
 
@@ -10,19 +10,23 @@ function Dashboard() {
   const [topApps, setTopApps] = useState<[string, number][]>([])
   const [hourlyData, setHourlyData] = useState<[number, number][]>([])
   const [recentRecords, setRecentRecords] = useState<UsageRecord[]>([])
+  const [categoryStats, setCategoryStats] = useState<CategoryStats[]>([])
+  const [viewMode, setViewMode] = useState<'apps' | 'categories'>('apps')
 
   const loadData = async () => {
     try {
-      const [total, apps, hourly, records] = await Promise.all([
+      const [total, apps, hourly, records, categories] = await Promise.all([
         api.getTodayTotalDuration(),
         api.getTopAppsToday(10),
         api.getHourlyDistributionToday(),
         api.getRecentRecords(20),
+        api.getTodayCategoryStats(),
       ])
       setTotalDuration(total)
       setTopApps(apps)
       setHourlyData(hourly)
       setRecentRecords(records)
+      setCategoryStats(categories)
     } catch (error) {
       console.error('Failed to load data:', error)
     }
@@ -40,6 +44,31 @@ function Dashboard() {
   }))
 
   const colors = ['#4fc3f7', '#81c784', '#fff176', '#ffb74d', '#ce93d8', '#90caf9', '#a5d6a7', '#fff59d', '#ffcc80', '#f48fb1']
+  const categoryColors: Record<string, string> = {
+    '开发工具': '#4fc3f7',
+    '浏览器': '#81c784',
+    '社交通讯': '#fff176',
+    '游戏娱乐': '#ffb74d',
+    '办公工具': '#ce93d8',
+    '系统工具': '#90caf9',
+    '其他': '#b0bec5',
+  }
+
+  const pieData = viewMode === 'apps'
+    ? topApps.map(([name, value], index) => ({
+        name,
+        value,
+        fill: colors[index % colors.length],
+      }))
+    : categoryStats.map((cat) => ({
+        name: cat.category_name,
+        value: cat.duration_seconds,
+        fill: categoryColors[cat.category_name] || '#b0bec5',
+      }))
+
+  const totalValue = viewMode === 'apps'
+    ? topApps.reduce((sum, [, duration]) => sum + duration, 0)
+    : categoryStats.reduce((sum, cat) => sum + cat.duration_seconds, 0)
 
   return (
     <div className="dashboard">
@@ -64,29 +93,54 @@ function Dashboard() {
         <div className="charts-row">
           <div className="chart-card">
             <div className="card-header">
-              <h3>应用使用排行</h3>
-              <button className="refresh-btn" onClick={loadData}>刷新</button>
+              <h3>使用占比</h3>
+              <div className="view-toggle">
+                <button
+                  className={`toggle-btn ${viewMode === 'apps' ? 'active' : ''}`}
+                  onClick={() => setViewMode('apps')}
+                >
+                  应用
+                </button>
+                <button
+                  className={`toggle-btn ${viewMode === 'categories' ? 'active' : ''}`}
+                  onClick={() => setViewMode('categories')}
+                >
+                  分类
+                </button>
+              </div>
             </div>
-            {topApps.length > 0 ? (
-              <div className="apps-list">
-                {topApps.map(([app, duration], index) => (
-                  <div key={index} className="app-item">
-                    <div className="app-rank">{index + 1}</div>
-                    <div className="app-info">
-                      <span className="app-name">{app}</span>
-                      <div className="app-bar-container">
-                        <div
-                          className="app-bar"
-                          style={{
-                            width: `${(duration / topApps[0][1]) * 100}%`,
-                            backgroundColor: colors[index % colors.length],
-                          }}
-                        />
-                      </div>
+            {pieData.length > 0 ? (
+              <div className="donut-container">
+                <ResponsiveContainer width="100%" height={220}>
+                  <PieChart>
+                    <Pie
+                      data={pieData}
+                      dataKey="value"
+                      nameKey="name"
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={60}
+                      outerRadius={90}
+                      paddingAngle={2}
+                    >
+                      {pieData.map((entry, index) => (
+                        <Cell key={index} fill={entry.fill} />
+                      ))}
+                    </Pie>
+                    <Tooltip formatter={(value) => [formatDuration(value as number), '时长']} />
+                  </PieChart>
+                </ResponsiveContainer>
+                <div className="donut-legend">
+                  {pieData.slice(0, 6).map((item, index) => (
+                    <div key={index} className="legend-item">
+                      <span className="legend-color" style={{ backgroundColor: item.fill }} />
+                      <span className="legend-name">{item.name}</span>
+                      <span className="legend-percent">
+                        {totalValue > 0 ? ((item.value / totalValue) * 100).toFixed(1) : 0}%
+                      </span>
                     </div>
-                    <span className="app-duration">{formatDuration(duration)}</span>
-                  </div>
-                ))}
+                  ))}
+                </div>
               </div>
             ) : (
               <div className="empty-state">暂无数据</div>
@@ -95,7 +149,7 @@ function Dashboard() {
 
           <div className="chart-card">
             <h3>小时分布</h3>
-            <ResponsiveContainer width="100%" height={200}>
+            <ResponsiveContainer width="100%" height={220}>
               <BarChart data={chartData}>
                 <XAxis dataKey="hour" tick={{ fontSize: 11 }} />
                 <YAxis tickFormatter={(v) => formatDuration(v as number)} tick={{ fontSize: 11 }} />
