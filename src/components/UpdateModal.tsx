@@ -1,15 +1,16 @@
-import { useUpdater, UpdateStatus } from '../hooks/useUpdater'
+import { useUpdater } from '../hooks/useUpdater'
 import './UpdateModal.css'
 
 interface UpdateModalProps {
   onClose: () => void
+  currentVersion: string
 }
 
-export function UpdateModal({ onClose }: UpdateModalProps) {
-  const { status, updateInfo, error, progress, checkForUpdates, downloadAndInstall, dismiss } = useUpdater(false)
+export function UpdateModal({ onClose, currentVersion }: UpdateModalProps) {
+  const { status, updateInfo, error, progress, checkForUpdates, installUpdate, dismiss } = useUpdater(false)
 
   const handleUpdate = async () => {
-    await downloadAndInstall()
+    await installUpdate()
   }
 
   const handleLater = () => {
@@ -42,13 +43,16 @@ export function UpdateModal({ onClose }: UpdateModalProps) {
             <div className="update-icon">🎉</div>
             <h3>发现新版本</h3>
             <div className="version-info">
-              <p><strong>当前版本：</strong>{updateInfo?.current_version}</p>
-              <p><strong>最新版本：</strong>{updateInfo?.latest_version}</p>
+              <p><strong>当前版本：</strong>{currentVersion}</p>
+              <p><strong>最新版本：</strong>{updateInfo?.version}</p>
+              {updateInfo?.date && (
+                <p><strong>发布日期：</strong>{updateInfo.date}</p>
+              )}
             </div>
-            {updateInfo?.release_notes && (
+            {updateInfo?.body && (
               <div className="release-notes">
                 <h4>更新说明：</h4>
-                <p>{updateInfo.release_notes}</p>
+                <p>{updateInfo.body}</p>
               </div>
             )}
             <div className="button-group">
@@ -70,12 +74,23 @@ export function UpdateModal({ onClose }: UpdateModalProps) {
           </div>
         )
 
+      case 'installing':
+        return (
+          <div className="update-modal-content installing">
+            <div className="spinner"></div>
+            <p>正在安装更新...</p>
+          </div>
+        )
+
       case 'ready':
         return (
           <div className="update-modal-content ready">
             <div className="success-icon">✅</div>
-            <h3>更新已下载</h3>
-            <p>更新已下载完成，应用即将重启...</p>
+            <h3>更新完成</h3>
+            <p>更新已安装完成，请重启应用</p>
+            <div className="button-group">
+              <button className="btn-primary" onClick={handleClose}>确定</button>
+            </div>
           </div>
         )
 

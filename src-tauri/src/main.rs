@@ -15,22 +15,13 @@ mod window_monitor;
 use database::{Database, DateStats, WeekStats, UsageRecord, CategoryStats};
 use scheduler::start_scheduler;
 use tray::{create_tray, hide_window_on_close};
-use update::{check_for_updates, get_current_version};
+use update::{get_current_version};
 use window_monitor::{get_foreground_window_info, is_idle, WindowInfo};
 
 struct MonitorState {
     db: Arc<Mutex<Database>>,
     current_window: Option<WindowInfo>,
     current_start_time: Option<chrono::DateTime<Local>>,
-}
-
-#[derive(Clone, serde::Serialize)]
-struct UpdatePayload {
-    has_update: bool,
-    current_version: String,
-    latest_version: String,
-    download_url: Option<String>,
-    release_notes: Option<String>,
 }
 
 #[tauri::command]
@@ -182,33 +173,6 @@ fn init_default_categories(state: tauri::State<'_, Arc<Mutex<MonitorState>>>) ->
 }
 
 #[tauri::command]
-fn check_for_update() -> UpdatePayload {
-    let github_repo = "yourusername/screen-manager";
-
-    match check_for_updates(github_repo) {
-        Ok(info) => UpdatePayload {
-            has_update: info.has_update,
-            current_version: info.current_version,
-            latest_version: info.latest_version,
-            download_url: info.download_url,
-            release_notes: info.release_notes,
-        },
-        Err(_) => UpdatePayload {
-            has_update: false,
-            current_version: get_current_version(),
-            latest_version: String::new(),
-            download_url: None,
-            release_notes: None,
-        },
-    }
-}
-
-#[tauri::command]
-fn skip_version(state: tauri::State<'_, Arc<Mutex<MonitorState>>>, version: String) -> bool {
-    state.lock().unwrap().db.lock().unwrap().set_skip_version(&version).is_ok()
-}
-
-#[tauri::command]
 fn get_app_version() -> String {
     get_current_version()
 }
@@ -216,40 +180,6 @@ fn get_app_version() -> String {
 #[tauri::command]
 fn get_data_path() -> String {
     update::get_app_data_dir().to_string_lossy().to_string()
-}
-
-#[tauri::command]
-async fn perform_update(app: tauri::AppHandle) -> Result<(), String> {
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    {
-        match app.updater() {
-            Ok(updater) => {
-                match updater.check().await {
-                    Ok(Some(update)) => {
-                        if let Err(e) = update.download_and_install().await {
-                            return Err(format!("下载或安装更新失败: {}", e));
-                        }
-                    }
-                    Ok(None) => {
-                        return Err("没有可用的更新".to_string());
-                    }
-                    Err(e) => {
-                        return Err(format!("检查更新失败: {}", e));
-                    }
-                }
-            }
-            Err(e) => {
-                return Err(format!("获取更新器失败: {}", e));
-            }
-        }
-    }
-
-    #[cfg(any(target_os = "android", target_os = "ios"))]
-    {
-        Err("此平台不支持自动更新".to_string())
-    }
-
-    Ok(())
 }
 
 fn main() {
@@ -321,7 +251,7 @@ fn main() {
     });
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_updater::Builder.new().build())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(monitor_state)
         .setup(|app| {
             create_tray(app.handle())?;
@@ -360,11 +290,8 @@ fn main() {
             get_week_category_stats,
             get_month_category_stats,
             init_default_categories,
-            check_for_update,
-            skip_version,
             get_app_version,
-            get_data_path,
-            perform_update
+            get_data_path
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

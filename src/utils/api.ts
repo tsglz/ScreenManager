@@ -25,14 +25,6 @@ export interface CategoryStats {
   duration_seconds: number
 }
 
-export interface UpdateInfo {
-  has_update: boolean
-  current_version: string
-  latest_version: string
-  download_url: string | null
-  release_notes: string | null
-}
-
 export const api = {
   getTodayTotalDuration: () => invoke<number>('get_today_total_duration'),
 
@@ -97,8 +89,4 @@ export const api = {
   getAppVersion: () => invoke<string>('get_app_version'),
 
   getDataPath: () => invoke<string>('get_data_path'),
-
-  checkForUpdate: () => invoke<UpdateInfo>('check_for_update'),
-
-  performUpdate: () => invoke<void>('perform_update'),
 }
