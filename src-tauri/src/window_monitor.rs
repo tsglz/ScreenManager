@@ -1,7 +1,7 @@
 #[repr(C)]
 struct LASTINPUTINFO {
-    CB_Size: u32,
-    DW_Time: u32,
+    cb_size: u32,
+    dw_time: u32,
 }
 
 #[link(name = "user32")]
@@ -118,8 +118,8 @@ fn get_process_name(hwnd: HWND) -> Result<String, MonitorError> {
 
 pub fn get_idle_duration_ms() -> Result<u32, MonitorError> {
     let mut last_input_info = LASTINPUTINFO {
-        CB_Size: std::mem::size_of::<LASTINPUTINFO>() as u32,
-        DW_Time: 0,
+        cb_size: std::mem::size_of::<LASTINPUTINFO>() as u32,
+        dw_time: 0,
     };
 
     let success = unsafe { GetLastInputInfo(&mut last_input_info) };
@@ -128,7 +128,7 @@ pub fn get_idle_duration_ms() -> Result<u32, MonitorError> {
     }
 
     let current_time = unsafe { GetTickCount() };
-    Ok(current_time.wrapping_sub(last_input_info.DW_Time))
+    Ok(current_time.wrapping_sub(last_input_info.dw_time))
 }
 
 pub fn is_idle() -> Result<bool, MonitorError> {

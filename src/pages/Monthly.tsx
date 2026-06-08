@@ -66,6 +66,7 @@ function Monthly() {
     '游戏娱乐': '#ffb74d',
     '办公工具': '#ce93d8',
     '系统工具': '#90caf9',
+    'ScreenManager': '#ef5350',
     '其他': '#b0bec5',
   }
 

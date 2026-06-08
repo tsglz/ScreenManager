@@ -137,7 +137,7 @@ npm run tauri:build
    - **GitHub Release**：使用 `https://github.com/{owner}/{repo}/releases/latest/download/latest.json`
    - **自建更新服务器**：使用您自己的更新服务器地址
 
-### 更新流程
+### 更新流程（注：目前自动更新存在一些问题，建议如有需要手动更新。）
 
 1. 应用启动时自动检查更新（3秒后后台检查）
 2. 发现新版本时显示更新弹窗
@@ -152,7 +152,7 @@ npm run tauri:build
 
 ## 版本
 
-当前版本：1.0.0
+当前版本：1.0.1
 
 ## 许可证
 

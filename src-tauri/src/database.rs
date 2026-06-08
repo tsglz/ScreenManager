@@ -257,6 +257,7 @@ impl Database {
             ("idea64.exe", "开发工具"),
             ("pycharm64.exe", "开发工具"),
             ("webstorm64.exe", "开发工具"),
+            ("Trae CN.exe", "开发工具"),
             ("clion64.exe", "开发工具"),
             ("rustrover.exe", "开发工具"),
             ("devenv.exe", "开发工具"),
@@ -265,10 +266,11 @@ impl Database {
             ("python.exe", "开发工具"),
             ("node.exe", "开发工具"),
             ("wechat.exe", "社交通讯"),
-            ("qq.exe", "社交通讯"),
+            ("QQ.exe", "社交通讯"),
             ("dingtalk.exe", "社交通讯"),
             ("Feishu.exe", "社交通讯"),
             ("lark.exe", "社交通讯"),
+            ("WeChatAppEx.exe", "社交通讯"),
             ("steam.exe", "游戏娱乐"),
             ("EpicGamesLauncher.exe", "游戏娱乐"),
             ("GenshinImpact.exe", "游戏娱乐"),
@@ -282,14 +284,15 @@ impl Database {
             ("obsidian.exe", "办公工具"),
             ("QClaw.exe", "办公工具"),
             ("Taskmgr.exe", "系统工具"),
-            ("explorer.exe", "系统工具"),
+            ("Explorer.EXE", "系统工具"),
             ("cmd.exe", "系统工具"),
             ("powershell.exe", "系统工具"),
             ("conhost.exe", "系统工具"),
             ("RuntimeBroker.exe", "系统工具"),
             ("svchost.exe", "系统工具"),
             ("SystemSettings.exe", "系统工具"),
-        ];
+            ("screen-manager.exe", "ScreenManager"),
+            ];
 
         for (process_name, category_name) in default_categories {
             self.conn.execute(
