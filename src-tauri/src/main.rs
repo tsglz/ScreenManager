@@ -9,7 +9,7 @@ use tauri::{async_runtime, Manager};
 
 mod ollama;
 
-use screen_manager_lib::database::{Database, DateStats, WeekStats, UsageRecord, CategoryStats, HourlyHeatmapEntry};
+use screen_manager_lib::database::{Database, DateStats, WeekStats, UsageRecord, CategoryStats, HourlyHeatmapEntry, Report, ReportListItem, ReportListResult};
 use screen_manager_lib::session_aggregator::{WorkSession, aggregate_sessions};
 use screen_manager_lib::scheduler::start_scheduler;
 use screen_manager_lib::tray::{create_tray, hide_window_on_close};
@@ -187,14 +187,81 @@ fn get_weekly_hourly_heatmap(state: tauri::State<'_, Arc<Mutex<MonitorState>>>, 
 }
 
 #[tauri::command]
-async fn generate_report(state: tauri::State<'_, Arc<Mutex<MonitorState>>>, report_type: String, start_date: String, end_date: String) -> Result<String, String> {
-    let params = ollama::GenerateReportParams {
-        report_type,
-        start_date,
-        end_date,
-    };
+async fn create_and_save_report(
+    state: tauri::State<'_, Arc<Mutex<MonitorState>>>,
+    report_type: String,
+    start_date: String,
+    end_date: String,
+) -> Result<(i64, String), String> {
+    let params = ollama::GenerateReportParams { report_type, start_date, end_date };
     let db = state.lock().unwrap().db.clone();
-    ollama::generate_report(&db, params).await
+    ollama::generate_and_save_report(&db, params).await
+}
+
+#[tauri::command]
+fn list_reports(
+    state: tauri::State<'_, Arc<Mutex<MonitorState>>>,
+    keyword: String,
+    filter_type: String,
+    filter_period: String,
+    page: i64,
+    page_size: i64,
+) -> ReportListResult {
+    state
+        .lock()
+        .unwrap()
+        .db
+        .lock()
+        .unwrap()
+        .list_reports(&keyword, &filter_type, &filter_period, page, page_size)
+        .unwrap_or(ReportListResult { items: Vec::new(), total: 0 })
+}
+
+#[tauri::command]
+fn get_report(
+    state: tauri::State<'_, Arc<Mutex<MonitorState>>>,
+    id: i64,
+) -> Option<Report> {
+    state
+        .lock()
+        .unwrap()
+        .db
+        .lock()
+        .unwrap()
+        .get_report(id)
+        .ok()
+        .flatten()
+}
+
+#[tauri::command]
+fn delete_report(
+    state: tauri::State<'_, Arc<Mutex<MonitorState>>>,
+    id: i64,
+) -> bool {
+    state
+        .lock()
+        .unwrap()
+        .db
+        .lock()
+        .unwrap()
+        .delete_report(id)
+        .unwrap_or(false)
+}
+
+#[tauri::command]
+fn export_report_to_file(
+    state: tauri::State<'_, Arc<Mutex<MonitorState>>>,
+    id: i64,
+    file_path: String,
+) -> bool {
+    state
+        .lock()
+        .unwrap()
+        .db
+        .lock()
+        .unwrap()
+        .export_report_to_file(id, &file_path)
+        .unwrap_or(false)
 }
 
 #[tauri::command]
@@ -401,11 +468,15 @@ fn main() {
             get_app_version,
             get_data_path,
             get_weekly_hourly_heatmap,
-            generate_report,
             get_work_sessions,
             set_record_project,
             clear_record_project,
-            get_hourly_heatmap_for_range
+            get_hourly_heatmap_for_range,
+            create_and_save_report,
+            list_reports,
+            get_report,
+            delete_report,
+            export_report_to_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
