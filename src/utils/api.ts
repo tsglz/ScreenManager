@@ -112,6 +112,9 @@ export const api = {
 
   getWeeklyHourlyHeatmap: (days: number) => invoke<HourlyHeatmapEntry[]>('get_weekly_hourly_heatmap', { days }),
 
+  getHourlyHeatmapForRange: (startDate: string, endDate: string) =>
+    invoke<HourlyHeatmapEntry[]>('get_hourly_heatmap_for_range', { startDate, endDate }),
+
   generateReport: (reportType: string, startDate: string, endDate: string) =>
     invoke<string>('generate_report', { reportType, startDate, endDate }),
 
