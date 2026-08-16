@@ -1,11 +1,11 @@
 {
-  "version": "1.0.1",
-  "notes": "v1.0.1 版本更新\n\n主要变更：\n1. 所有配置文件版本号升级至1.0.1\n2. 修复窗口监控代码中LASTINPUTINFO字段命名规范\n3. 新增Trae CN、QQ、WeChatAppEx和screen-manager.exe的进程映射\n4. 修复explorer.exe进程名大小写匹配问题\n5. 在所有页面文件中添加ScreenManager分类颜色配置\n6. 更新README和latest.json版本信息\n\nv1.0.1+ 新增功能：\n- 定时自动生成报告：每天 18:30 标准日报，每周日 15:00 标准周报\n- 网络代理设置：支持在设置页面配置 HTTP/HTTPS 代理，检查更新时自动应用",
-  "pub_date": "2026-06-08T17:16:29Z",
+  "version": "2.0.0",
+  "notes": "v2.0.0 项目重构\n\n 新增功能\n\n1. 定时自动生成报告\n   • 每天下午 18:30 自动生成一份当天的「标准日报」（00:00 ~ 当前）\n   • 每周日下午 15:00 自动生成一份「标准周报」（本周一 ~ 本周日）\n   • 使用 HashSet 任务指纹 + 30 秒 tick 触发，保证每天/每周仅执行一次，重复启动应用也不会重复生成\n\n2. 设置页新增「网络与代理」\n   • 可直接填写 HTTP/HTTPS 代理地址（例如 Clash 默认端口 http://127.0.0.1:7890），保存后立即生效，无需重启应用\n   • 「检查更新」流程显式将代理地址传递给 Tauri Updater（CheckOptions.proxy），同时启动早期就写入 HTTP_PROXY / HTTPS_PROXY 进程环境变量，reqwest 也会自动读取\n   • 更新检查端点按优先级依次尝试：ghproxy 国内镜像 → ghproxy.net 镜像 → GitHub 直连，任一端点成功即通过\n\n3. 深色 / 浅色主题切换\n   • 新增主题管理 Hook 与本地存储配置，主题偏好会持久化，下次启动自动恢复\n   • 支持跟随系统主题 / 强制浅色 / 强制深色 三种模式（具体以设置页面提供的选项为准）\n\n\n 依赖升级\n\n\n4. react-router-dom 升级到 7.18.2\n5. 后端新增 reqwest 0.12（带 JSON feature）依赖，为后续新增 HTTP 请求类功能提供底层能力\n6. 前端整体依赖版本统一清理，避免类型定义不匹配\n\n\n 代码与配置优化\n\n\n7. 新增应用配置模块（AppConfig）\n   • 后端 config.rs 提供统一的配置读写 + 运行时代理环境变量注入\n   • 新增 Tauri 命令 get_app_config / save_app_config，前后端通过接口交互而不是硬编码\n\n8. Recharts 图表组件代码风格统一\n   • 统一解构赋值写法、清理内联函数，减少重复渲染隐患\n\n9. 配置文件整理\n   • 更新 .gitignore：忽略更多构建产物（.vite、dist-ssr）、本地调试配置、临时证书文件等\n\n\n Bug 修复\n\n\n10. 修复 Layout.css 中 CSS 变量引用错误的问题：页面背景色现在正确读取主题变量，切换主题时背景随主题一同变化\n11. 修复 latest.json 中 pub_date 格式问题（RFC 3339 带时区格式），以及更新下载 URL/Signature 指向旧版本的问题，避免「检查更新成功但下载到旧安装包」的隐患\n\n\n 升级提示\n\n\n• 如果升级后「检查更新」仍然失败，请先打开「设置 → 网络与代理」填写你本机的代理地址并保存，再重新点击检查更新\n• 定时报告生成依赖 Ollama 接口（http://localhost:11434），请确保 Ollama 服务已启动并已拉取你在设置中指定的模型",
+  "pub_date": "2026-08-17T12:00:00Z",
   "platforms": {
     "windows-x86_64": {
-      "url": "https://github.com/tsglz/ScreenManager/releases/download/v1.0.1/ScreenManager_1.0.1_x64-setup.exe",
-      "signature": "https://github.com/tsglz/ScreenManager/releases/download/v1.0.1/ScreenManager_1.0.1_x64-setup.exe.sig"
+      "url": "https://github.com/tsglz/ScreenManager/releases/download/v2.0.0/ScreenManager_2.0.0_x64-setup.exe",
+      "signature": "https://github.com/tsglz/ScreenManager/releases/download/v2.0.0/ScreenManager_2.0.0_x64-setup.exe.sig"
     }
   }
 }
