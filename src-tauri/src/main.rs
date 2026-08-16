@@ -7,18 +7,15 @@ use tauri::{async_runtime, Manager};
 //#[cfg(not(any(target_os = "android", target_os = "ios")))]
 //use tauri_plugin_updater::UpdaterExt;
 
-mod autostart;
-mod database;
-mod scheduler;
-mod tray;
-mod update;
-mod window_monitor;
+mod ollama;
 
-use database::{Database, DateStats, WeekStats, UsageRecord, CategoryStats};
-use scheduler::start_scheduler;
-use tray::{create_tray, hide_window_on_close};
-use update::{get_current_version};
-use window_monitor::{get_foreground_window_info, is_idle, WindowInfo};
+use screen_manager_lib::database::{Database, DateStats, WeekStats, UsageRecord, CategoryStats, HourlyHeatmapEntry};
+use screen_manager_lib::session_aggregator::{WorkSession, aggregate_sessions};
+use screen_manager_lib::scheduler::start_scheduler;
+use screen_manager_lib::tray::{create_tray, hide_window_on_close};
+use screen_manager_lib::update::{get_current_version};
+use screen_manager_lib::window_monitor::{get_foreground_window_info, is_idle, WindowInfo};
+use screen_manager_lib::autostart;
 
 struct MonitorState {
     db: Arc<Mutex<Database>>,
@@ -181,9 +178,94 @@ fn get_app_version() -> String {
 
 #[tauri::command]
 fn get_data_path() -> String {
-    update::get_app_data_dir().to_string_lossy().to_string()
+    screen_manager_lib::update::get_app_data_dir().to_string_lossy().to_string()
 }
 
+#[tauri::command]
+fn get_weekly_hourly_heatmap(state: tauri::State<'_, Arc<Mutex<MonitorState>>>, days: i64) -> Vec<HourlyHeatmapEntry> {
+    state.lock().unwrap().db.lock().unwrap().get_weekly_hourly_heatmap(days).unwrap_or_default()
+}
+
+#[tauri::command]
+async fn generate_report(state: tauri::State<'_, Arc<Mutex<MonitorState>>>, report_type: String, start_date: String, end_date: String) -> Result<String, String> {
+    let params = ollama::GenerateReportParams {
+        report_type,
+        start_date,
+        end_date,
+    };
+    let db = state.lock().unwrap().db.clone();
+    ollama::generate_report(&db, params).await
+}
+
+#[tauri::command]
+fn get_work_sessions(
+    state: tauri::State<'_, Arc<Mutex<MonitorState>>>,
+    start_date: String,
+    end_date: String,
+) -> Vec<WorkSession> {
+    let idle_threshold: i64 = state
+        .lock()
+        .unwrap()
+        .db
+        .lock()
+        .unwrap()
+        .get_config_value("session_idle_threshold")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(900);
+    let switch_threshold: i64 = state
+        .lock()
+        .unwrap()
+        .db
+        .lock()
+        .unwrap()
+        .get_config_value("session_switch_threshold")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(300);
+
+    let db = state.lock().unwrap().db.clone();
+    let (records, overrides) = {
+        let dbg = db.lock().unwrap();
+        let recs = dbg
+            .get_records_for_range_ordered(&start_date, &end_date)
+            .unwrap_or_default();
+        let ovs = dbg
+            .get_overrides_for_range(&start_date, &end_date)
+            .unwrap_or_default();
+        (recs, ovs)
+    };
+    aggregate_sessions(records, overrides, idle_threshold, switch_threshold)
+}
+
+#[tauri::command]
+fn set_record_project(
+    state: tauri::State<'_, Arc<Mutex<MonitorState>>>,
+    record_id: i64,
+    project: String,
+) -> bool {
+    state
+        .lock()
+        .unwrap()
+        .db
+        .lock()
+        .unwrap()
+        .set_record_override(record_id, &project, "user")
+        .is_ok()
+}
+
+#[tauri::command]
+fn clear_record_project(
+    state: tauri::State<'_, Arc<Mutex<MonitorState>>>,
+    record_id: i64,
+) -> bool {
+    state
+        .lock()
+        .unwrap()
+        .db
+        .lock()
+        .unwrap()
+        .clear_record_override(record_id)
+        .is_ok()
+}
 
 fn main() {
     let db = Database::new().expect("Failed to create database");
@@ -301,7 +383,12 @@ fn main() {
             get_month_category_stats,
             init_default_categories,
             get_app_version,
-            get_data_path
+            get_data_path,
+            get_weekly_hourly_heatmap,
+            generate_report,
+            get_work_sessions,
+            set_record_project,
+            clear_record_project
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
