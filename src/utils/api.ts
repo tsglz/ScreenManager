@@ -25,6 +25,26 @@ export interface CategoryStats {
   duration_seconds: number
 }
 
+export interface HourlyHeatmapEntry {
+  date: string
+  hour: number
+  duration_seconds: number
+}
+
+export interface ProjectSlice {
+  name: string
+  seconds: number
+}
+
+export interface WorkSession {
+  start_time: string
+  end_time: string
+  total_seconds: number
+  main_project: string
+  projects: ProjectSlice[]
+  record_count: number
+}
+
 export const api = {
   getTodayTotalDuration: () => invoke<number>('get_today_total_duration'),
 
@@ -89,4 +109,18 @@ export const api = {
   getAppVersion: () => invoke<string>('get_app_version'),
 
   getDataPath: () => invoke<string>('get_data_path'),
+
+  getWeeklyHourlyHeatmap: (days: number) => invoke<HourlyHeatmapEntry[]>('get_weekly_hourly_heatmap', { days }),
+
+  generateReport: (reportType: string, startDate: string, endDate: string) =>
+    invoke<string>('generate_report', { reportType, startDate, endDate }),
+
+  getWorkSessions: (startDate: string, endDate: string) =>
+    invoke<WorkSession[]>('get_work_sessions', { startDate, endDate }),
+
+  setRecordProject: (recordId: number, project: string) =>
+    invoke<boolean>('set_record_project', { recordId, project }),
+
+  clearRecordProject: (recordId: number) =>
+    invoke<boolean>('clear_record_project', { recordId }),
 }
