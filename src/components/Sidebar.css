@@ -1,13 +1,14 @@
 .sidebar {
-  width: 180px;
-  background: #1a1a2e;
-  color: #eee;
+  width: 190px;
+  background: var(--bg-sidebar);
+  color: var(--text-sidebar);
   display: flex;
   flex-direction: column;
   padding: 20px 0;
   height: 100vh;
   position: sticky;
   top: 0;
+  transition: background 0.3s;
 }
 
 .sidebar-logo {
@@ -17,7 +18,8 @@
   padding: 0 20px 30px;
   font-size: 18px;
   font-weight: bold;
-  border-bottom: 1px solid #333;
+  color: var(--text-sidebar-hover);
+  border-bottom: 1px solid var(--border-light);
   margin-bottom: 20px;
 }
 
@@ -34,7 +36,7 @@
 
 .nav-list.bottom {
   margin-top: auto;
-  border-top: 1px solid #333;
+  border-top: 1px solid var(--border-light);
   padding-top: 10px;
 }
 
@@ -43,21 +45,29 @@
   align-items: center;
   gap: 12px;
   padding: 14px 20px;
-  color: #aaa;
+  color: var(--text-sidebar);
   text-decoration: none;
   transition: all 0.2s;
   border-left: 3px solid transparent;
+  cursor: pointer;
+  background: none;
+  border-top: none;
+  border-right: none;
+  border-bottom: none;
+  width: 100%;
+  text-align: left;
+  font-size: 15px;
 }
 
 .nav-item:hover {
-  background: #252540;
-  color: #fff;
+  background: var(--bg-sidebar-hover);
+  color: var(--text-sidebar-hover);
 }
 
 .nav-item.active {
-  background: #252540;
-  color: #4fc3f7;
-  border-left-color: #4fc3f7;
+  background: var(--bg-sidebar-active);
+  color: var(--text-sidebar-active);
+  border-left-color: var(--text-sidebar-active);
 }
 
 .nav-icon {
@@ -66,4 +76,8 @@
 
 .nav-label {
   font-size: 15px;
+}
+
+.theme-toggle {
+  margin-bottom: 4px;
 }

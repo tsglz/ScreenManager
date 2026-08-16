@@ -5,7 +5,7 @@
 
 .main-content {
   flex: 1;
-  background: #f5f7fa;
+  background: var(--bg-page);
   overflow-y: auto;
   height: 100vh;
 }

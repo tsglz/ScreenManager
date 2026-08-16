@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { useUpdater } from '../hooks/useUpdater'
 import './UpdateModal.css'
 
@@ -8,6 +9,11 @@ interface UpdateModalProps {
 
 export function UpdateModal({ onClose, currentVersion }: UpdateModalProps) {
   const { status, updateInfo, error, progress, checkForUpdates, installUpdate, dismiss } = useUpdater(false)
+
+  // 弹窗打开后立即触发检查
+  useEffect(() => {
+    checkForUpdates()
+  }, [checkForUpdates])
 
   const handleUpdate = async () => {
     await installUpdate()
@@ -29,11 +35,25 @@ export function UpdateModal({ onClose, currentVersion }: UpdateModalProps) {
 
   const renderContent = () => {
     switch (status) {
+      case 'idle':
       case 'checking':
         return (
           <div className="update-modal-content checking">
             <div className="spinner"></div>
             <p>正在检查更新...</p>
+          </div>
+        )
+
+      case 'uptodate':
+        return (
+          <div className="update-modal-content uptodate">
+            <div className="success-icon">✨</div>
+            <h3>已是最新版本</h3>
+            <p>当前版本 <strong>{currentVersion}</strong> 为最新版本</p>
+            <div className="button-group">
+              <button className="btn-primary" onClick={handleClose}>确定</button>
+              <button className="btn-secondary" onClick={handleRetry}>重新检查</button>
+            </div>
           </div>
         )
 
@@ -95,24 +115,16 @@ export function UpdateModal({ onClose, currentVersion }: UpdateModalProps) {
         )
 
       case 'error':
+      default:
         return (
           <div className="update-modal-content error">
             <div className="error-icon">❌</div>
-            <h3>更新失败</h3>
+            <h3>检查失败</h3>
             <p>{error || '更新过程中出现错误'}</p>
             <div className="button-group">
               <button className="btn-primary" onClick={handleRetry}>重试</button>
               <button className="btn-secondary" onClick={handleClose}>关闭</button>
             </div>
-          </div>
-        )
-
-      case 'idle':
-      default:
-        return (
-          <div className="update-modal-content idle">
-            <p>检查更新时发生错误</p>
-            <button className="btn-primary" onClick={handleRetry}>重试</button>
           </div>
         )
     }

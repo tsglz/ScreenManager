@@ -3,14 +3,15 @@
   justify-content: space-between;
   align-items: center;
   padding: 20px 30px;
-  background: #fff;
-  border-bottom: 1px solid #eee;
+  background: var(--bg-header);
+  border-bottom: 1px solid var(--border);
+  transition: background 0.3s, border-color 0.3s;
 }
 
 .header-title {
   font-size: 24px;
   font-weight: 600;
-  color: #333;
+  color: var(--text-primary);
   margin: 0;
 }
 
@@ -22,13 +23,13 @@
 
 .autostart-label {
   font-size: 14px;
-  color: #666;
+  color: var(--text-secondary);
 }
 
 .toggle-switch {
   width: 44px;
   height: 24px;
-  background: #ccc;
+  background: var(--bg-toggle-track);
   border-radius: 12px;
   cursor: pointer;
   position: relative;
@@ -36,7 +37,7 @@
 }
 
 .toggle-switch.active {
-  background: #4fc3f7;
+  background: var(--accent);
 }
 
 .toggle-knob {

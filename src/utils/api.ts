@@ -65,6 +65,10 @@ export interface ReportListResult {
   total: number
 }
 
+export interface AppConfig {
+  http_proxy?: string | null
+}
+
 export const api = {
   getTodayTotalDuration: () => invoke<number>('get_today_total_duration'),
 
@@ -158,4 +162,8 @@ export const api = {
 
   exportReportToFile: (id: number, filePath: string) =>
     invoke<boolean>('export_report_to_file', { id, filePath }),
+
+  getAppConfig: () => invoke<AppConfig>('get_app_config'),
+
+  saveAppConfig: (cfg: AppConfig) => invoke<void>('save_app_config', { cfg }),
 }

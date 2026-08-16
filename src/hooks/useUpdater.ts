@@ -1,7 +1,8 @@
 import { useState, useCallback, useEffect } from 'react'
 import { check } from '@tauri-apps/plugin-updater'
+import { api } from '../utils/api'
 
-export type UpdateStatus = 'idle' | 'checking' | 'available' | 'downloading' | 'installing' | 'ready' | 'error'
+export type UpdateStatus = 'idle' | 'checking' | 'available' | 'downloading' | 'installing' | 'ready' | 'error' | 'uptodate'
 
 export interface UpdateInfo {
   version: string
@@ -31,7 +32,14 @@ export function useUpdater(autoCheck = true): UseUpdaterReturn {
     setError(null)
 
     try {
-      const update = await check()
+      const cfg = await api.getAppConfig().catch(() => null)
+      const proxy = cfg?.http_proxy && cfg.http_proxy.trim() !== '' ? cfg.http_proxy.trim() : undefined
+      if (proxy) {
+        // eslint-disable-next-line no-console
+        console.log('[Updater] 使用配置的代理地址进行更新检查:', proxy)
+      }
+
+      const update = await check({ proxy })
 
       if (update) {
         setUpdateInfo({
@@ -42,10 +50,14 @@ export function useUpdater(autoCheck = true): UseUpdaterReturn {
         setCurrentUpdate(update)
         setStatus('available')
       } else {
-        setStatus('idle')
+        setStatus('uptodate')
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : '检查更新失败，请检查网络连接')
+      const raw = err instanceof Error ? err.message : String(err ?? '未知错误')
+      const hint =
+        '（国内用户提示：请先在「设置 → 网络与代理」中填入代理地址；应用内置 ghproxy 镜像作为候选节点，' +
+        '若仍失败请手动访问 GitHub Releases 下载。）'
+      setError(`${raw}${hint}`)
       setStatus('error')
     }
   }, [])

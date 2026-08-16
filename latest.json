@@ -1,11 +1,11 @@
 {
   "version": "1.0.1",
-  "notes": "v1.0.1 版本更新\n\n主要变更：\n1. 所有配置文件版本号升级至1.0.1\n2. 修复窗口监控代码中LASTINPUTINFO字段命名规范\n3. 新增Trae CN、QQ、WeChatAppEx和screen-manager.exe的进程映射\n4. 修复explorer.exe进程名大小写匹配问题\n5. 在所有页面文件中添加ScreenManager分类颜色配置\n6. 更新README和latest.json版本信息",
-  "pub_date": "2026-05-31",
+  "notes": "v1.0.1 版本更新\n\n主要变更：\n1. 所有配置文件版本号升级至1.0.1\n2. 修复窗口监控代码中LASTINPUTINFO字段命名规范\n3. 新增Trae CN、QQ、WeChatAppEx和screen-manager.exe的进程映射\n4. 修复explorer.exe进程名大小写匹配问题\n5. 在所有页面文件中添加ScreenManager分类颜色配置\n6. 更新README和latest.json版本信息\n\nv1.0.1+ 新增功能：\n- 定时自动生成报告：每天 18:30 标准日报，每周日 15:00 标准周报\n- 网络代理设置：支持在设置页面配置 HTTP/HTTPS 代理，检查更新时自动应用",
+  "pub_date": "2026-06-08T17:16:29Z",
   "platforms": {
     "windows-x86_64": {
-      "url": "https://github.com/tsglz/ScreenManager/releases/download/v1.0.0/ScreenManager_1.0.0_x64-setup.exe",
-      "signature": "https://github.com/tsglz/ScreenManager/releases/download/v1.0.0/ScreenManager_1.0.0_x64-setup.exe.sig"
+      "url": "https://github.com/tsglz/ScreenManager/releases/download/v1.0.1/ScreenManager_1.0.1_x64-setup.exe",
+      "signature": "https://github.com/tsglz/ScreenManager/releases/download/v1.0.1/ScreenManager_1.0.1_x64-setup.exe.sig"
     }
   }
 }

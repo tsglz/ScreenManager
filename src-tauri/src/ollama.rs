@@ -1,5 +1,5 @@
 use chrono::NaiveDate;
-use screen_manager_lib::database::{CategoryStats, Database, UsageRecord, DateStats};
+use crate::database::{CategoryStats, Database, UsageRecord, DateStats};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 

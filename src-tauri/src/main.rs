@@ -7,9 +7,9 @@ use tauri::{async_runtime, Manager};
 //#[cfg(not(any(target_os = "android", target_os = "ios")))]
 //use tauri_plugin_updater::UpdaterExt;
 
-mod ollama;
-
+use screen_manager_lib::config::{self, AppConfig};
 use screen_manager_lib::database::{Database, DateStats, WeekStats, UsageRecord, CategoryStats, HourlyHeatmapEntry, Report, ReportListItem, ReportListResult};
+use screen_manager_lib::ollama::{self, GenerateReportParams};
 use screen_manager_lib::session_aggregator::{WorkSession, aggregate_sessions};
 use screen_manager_lib::scheduler::start_scheduler;
 use screen_manager_lib::tray::{create_tray, hide_window_on_close};
@@ -350,7 +350,25 @@ fn get_hourly_heatmap_for_range(
         .unwrap_or_default()
 }
 
+#[tauri::command]
+fn get_app_config() -> AppConfig {
+    config::load_config()
+}
+
+#[tauri::command]
+fn save_app_config(cfg: AppConfig) -> Result<(), String> {
+    // 先保存到文件
+    config::save_config(&cfg)?;
+    // 再将代理实时应用到进程环境变量（对后续所有网络请求立即生效）
+    config::set_proxy_at_runtime(cfg.http_proxy.clone());
+    Ok(())
+}
+
 fn main() {
+    // 启动最早期：读取配置并应用代理环境变量（先于任何网络请求）
+    let startup_cfg = config::load_config();
+    config::apply_proxy_env(&startup_cfg);
+
     let db = Database::new().expect("Failed to create database");
     db.repair_abnormal_records().ok();
     db.init_default_categories().ok();
@@ -476,7 +494,9 @@ fn main() {
             list_reports,
             get_report,
             delete_report,
-            export_report_to_file
+            export_report_to_file,
+            get_app_config,
+            save_app_config
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
