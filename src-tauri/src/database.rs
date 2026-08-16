@@ -3,7 +3,7 @@ use rusqlite::{params, Connection, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-pub const CURRENT_SCHEMA_VERSION: i32 = 4;
+pub const CURRENT_SCHEMA_VERSION: i32 = 5;
 
 /// 默认分类列表版本号。每当 `init_default_categories` 中的默认映射发生变化时递增。
 /// 升级时会用 INSERT OR REPLACE 刷新已有默认条目，修复历史遗留的错配分类。
@@ -51,6 +51,37 @@ pub struct HourlyHeatmapEntry {
     pub date: String,
     pub hour: i32,
     pub duration_seconds: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Report {
+    pub id: i64,
+    pub report_type: String,
+    pub periodicity: String,
+    pub start_date: String,
+    pub end_date: String,
+    pub title: String,
+    pub content_md: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReportListItem {
+    pub id: i64,
+    pub report_type: String,
+    pub periodicity: String,
+    pub start_date: String,
+    pub end_date: String,
+    pub title: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReportListResult {
+    pub items: Vec<ReportListItem>,
+    pub total: i64,
 }
 
 pub struct Database {
@@ -140,6 +171,15 @@ impl Database {
             Self::migration_v4(conn)?;
             conn.execute(
                 "INSERT INTO schema_version (version, applied_at) VALUES (4, datetime('now'))",
+                [],
+            )?;
+        }
+
+        if from_version < 5 {
+            println!("Running migration v5...");
+            Self::migration_v5(conn)?;
+            conn.execute(
+                "INSERT INTO schema_version (version, applied_at) VALUES (5, datetime('now'))",
                 [],
             )?;
         }
@@ -272,6 +312,27 @@ impl Database {
             [],
         )?;
 
+        Ok(())
+    }
+
+    fn migration_v5(conn: &Connection) -> Result<()> {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS reports (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                report_type TEXT    NOT NULL,
+                periodicity TEXT    NOT NULL,
+                start_date  TEXT    NOT NULL,
+                end_date    TEXT    NOT NULL,
+                title       TEXT    NOT NULL,
+                content_md  TEXT    NOT NULL,
+                created_at  TEXT    NOT NULL,
+                updated_at  TEXT    NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_reports_created ON reports(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_reports_type    ON reports(report_type, periodicity);
+            "#,
+        )?;
         Ok(())
     }
 
@@ -1600,5 +1661,178 @@ impl Database {
         })?;
 
         results.collect()
+    }
+
+    pub fn insert_or_update_report(
+        &self,
+        report_type: &str,
+        periodicity: &str,
+        start_date: &str,
+        end_date: &str,
+        title: &str,
+        content_md: &str,
+    ) -> Result<i64> {
+        let tx = self.conn.unchecked_transaction()?;
+
+        // 查已存在（按 report_type + start_date + end_date 唯一）
+        let existing: Option<i64> = tx
+            .query_row(
+                "SELECT id FROM reports
+                 WHERE report_type = ?1 AND start_date = ?2 AND end_date = ?3",
+                params![report_type, start_date, end_date],
+                |row| row.get(0),
+            )
+            .ok();
+
+        let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        let id = match existing {
+            Some(id) => {
+                tx.execute(
+                    "UPDATE reports SET
+                        periodicity = ?1,
+                        title       = ?2,
+                        content_md  = ?3,
+                        updated_at  = ?4
+                     WHERE id = ?5",
+                    params![periodicity, title, content_md, now, id],
+                )?;
+                id
+            }
+            None => {
+                tx.execute(
+                    "INSERT INTO reports
+                        (report_type, periodicity, start_date, end_date, title, content_md, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
+                    params![report_type, periodicity, start_date, end_date, title, content_md, now],
+                )?;
+                tx.last_insert_rowid()
+            }
+        };
+
+        tx.commit()?;
+        Ok(id)
+    }
+
+    pub fn get_report(&self, id: i64) -> Result<Option<Report>> {
+        let result = self.conn.query_row(
+            "SELECT id, report_type, periodicity, start_date, end_date, title, content_md, created_at, updated_at
+             FROM reports WHERE id = ?1",
+            params![id],
+            |row| {
+                Ok(Report {
+                    id: row.get(0)?,
+                    report_type: row.get(1)?,
+                    periodicity: row.get(2)?,
+                    start_date: row.get(3)?,
+                    end_date: row.get(4)?,
+                    title: row.get(5)?,
+                    content_md: row.get(6)?,
+                    created_at: row.get(7)?,
+                    updated_at: row.get(8)?,
+                })
+            },
+        );
+        match result {
+            Ok(r) => Ok(Some(r)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn list_reports(
+        &self,
+        keyword: &str,
+        filter_type: &str,
+        filter_period: &str,
+        page: i64,
+        page_size: i64,
+    ) -> Result<ReportListResult> {
+        let page = page.max(1);
+        let page_size = page_size.clamp(1, 100);
+        let offset = (page - 1) * page_size;
+
+        let kw_like = format!("%{}%", keyword);
+
+        // 动态 WHERE 子句与参数（rusqlite 0.29 不支持 params_from_iter，
+        // 用 Vec<&dyn ToSql> + .as_slice() 切片绑定，Params trait 对 &[&T] 有实现）
+        let mut conditions: Vec<&str> = Vec::new();
+        let mut filter_params: Vec<&dyn rusqlite::ToSql> = Vec::new();
+        if !keyword.is_empty() {
+            conditions.push("(title LIKE ? OR content_md LIKE ?)");
+            filter_params.push(&kw_like);
+            filter_params.push(&kw_like);
+        }
+        if !filter_type.is_empty() {
+            conditions.push("report_type = ?");
+            filter_params.push(&filter_type);
+        }
+        if !filter_period.is_empty() {
+            conditions.push("periodicity = ?");
+            filter_params.push(&filter_period);
+        }
+
+        let where_clause = if conditions.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", conditions.join(" AND "))
+        };
+
+        // items 查询参数 = filter 参数 + LIMIT + OFFSET
+        let mut items_params: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(filter_params.len() + 2);
+        items_params.extend_from_slice(&filter_params);
+        items_params.push(&page_size);
+        items_params.push(&offset);
+
+        let sql_items = format!(
+            "SELECT id, report_type, periodicity, start_date, end_date, title, created_at, updated_at
+             FROM reports {}
+             ORDER BY created_at DESC
+             LIMIT ? OFFSET ?",
+            where_clause
+        );
+
+        let mut stmt = self.conn.prepare(&sql_items)?;
+        let items: Vec<ReportListItem> = stmt
+            .query_map(items_params.as_slice(), |row| {
+                Ok(ReportListItem {
+                    id: row.get(0)?,
+                    report_type: row.get(1)?,
+                    periodicity: row.get(2)?,
+                    start_date: row.get(3)?,
+                    end_date: row.get(4)?,
+                    title: row.get(5)?,
+                    created_at: row.get(6)?,
+                    updated_at: row.get(7)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // total 查询（仅 filter 参数，不含 LIMIT/OFFSET）
+        let sql_total = format!("SELECT COUNT(*) FROM reports {}", where_clause);
+        let total: i64 =
+            self.conn
+                .query_row(&sql_total, filter_params.as_slice(), |row| row.get(0))?;
+
+        Ok(ReportListResult { items, total })
+    }
+
+    pub fn delete_report(&self, id: i64) -> Result<bool> {
+        let affected = self.conn.execute("DELETE FROM reports WHERE id = ?1", params![id])?;
+        Ok(affected > 0)
+    }
+
+    pub fn export_report_to_file(&self, id: i64, file_path: &str) -> Result<bool> {
+        let content_md: String = match self.conn.query_row(
+            "SELECT content_md FROM reports WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        ) {
+            Ok(c) => c,
+            Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(false),
+            Err(e) => return Err(e),
+        };
+        std::fs::write(file_path, content_md)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        Ok(true)
     }
 }
