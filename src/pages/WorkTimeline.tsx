@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { invoke } from '@tauri-apps/api/core'
 import { api, UsageRecord, WorkSession, ProjectSlice } from '../utils/api'
 import './WorkTimeline.css'
@@ -54,10 +55,34 @@ function projectColor(name: string): string {
   return palette[h % palette.length]
 }
 
+function parseDate(s: string) {
+  const [y, m, d] = s.split('-').map(Number)
+  return new Date(y, m - 1, d)
+}
+
 function WorkTimeline() {
-  const [rangeKey, setRangeKey] = useState<RangeKey>('today')
-  const [customStart, setCustomStart] = useState(todayStr())
-  const [customEnd, setCustomEnd] = useState(todayStr())
+  const [searchParams] = useSearchParams()
+  const urlStart = searchParams.get('start')
+  const urlEnd = searchParams.get('end')
+  const urlMode = useMemo(() => {
+    if (!urlStart || !urlEnd) return null
+    const dateRe = /^\d{4}-\d{2}-\d{2}$/
+    if (!dateRe.test(urlStart) || !dateRe.test(urlEnd)) return null
+    const sT = parseDate(urlStart).getTime()
+    const eT = parseDate(urlEnd).getTime()
+    if (isNaN(sT) || isNaN(eT) || sT > eT) return null
+    const days = Math.round((eT - sT) / 86400000) + 1
+    return { start: urlStart, end: urlEnd, days }
+  }, [urlStart, urlEnd])
+
+  const today = todayStr()
+  const initialStart = urlMode ? urlMode.start : today
+  const initialEnd = urlMode ? urlMode.end : today
+  const initialPreset: RangeKey = urlMode ? 'custom' : 'today'
+
+  const [rangeKey, setRangeKey] = useState<RangeKey>(initialPreset)
+  const [customStart, setCustomStart] = useState(initialStart)
+  const [customEnd, setCustomEnd] = useState(initialEnd)
   const [sessions, setSessions] = useState<WorkSession[]>([])
   const [loading, setLoading] = useState(false)
   const [expanded, setExpanded] = useState<number | null>(null)
