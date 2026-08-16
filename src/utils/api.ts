@@ -45,6 +45,26 @@ export interface WorkSession {
   record_count: number
 }
 
+export interface ReportListItem {
+  id: number
+  report_type: string
+  periodicity: 'daily' | 'weekly' | 'monthly'
+  start_date: string
+  end_date: string
+  title: string
+  created_at: string
+  updated_at: string
+}
+
+export interface Report extends ReportListItem {
+  content_md: string
+}
+
+export interface ReportListResult {
+  items: ReportListItem[]
+  total: number
+}
+
 export const api = {
   getTodayTotalDuration: () => invoke<number>('get_today_total_duration'),
 
@@ -115,9 +135,6 @@ export const api = {
   getHourlyHeatmapForRange: (startDate: string, endDate: string) =>
     invoke<HourlyHeatmapEntry[]>('get_hourly_heatmap_for_range', { startDate, endDate }),
 
-  generateReport: (reportType: string, startDate: string, endDate: string) =>
-    invoke<string>('generate_report', { reportType, startDate, endDate }),
-
   getWorkSessions: (startDate: string, endDate: string) =>
     invoke<WorkSession[]>('get_work_sessions', { startDate, endDate }),
 
@@ -126,4 +143,23 @@ export const api = {
 
   clearRecordProject: (recordId: number) =>
     invoke<boolean>('clear_record_project', { recordId }),
+
+  createAndSaveReport: (reportType: string, startDate: string, endDate: string) =>
+    invoke<[number, string]>('create_and_save_report', { reportType, startDate, endDate }),
+
+  listReports: (keyword: string, filterType: string, filterPeriod: string, page: number, pageSize: number) =>
+    invoke<ReportListResult>('list_reports', { keyword, filterType, filterPeriod, page, pageSize }),
+
+  getReport: (id: number) =>
+    invoke<Report | null>('get_report', { id }),
+
+  deleteReport: (id: number) =>
+    invoke<boolean>('delete_report', { id }),
+
+  exportReportToFile: (id: number, filePath: string) =>
+    invoke<boolean>('export_report_to_file', { id, filePath }),
+
+  // 兼容 alias，待所有调用点迁移后删除（Task 6 处理）
+  generateReport: (reportType: string, startDate: string, endDate: string) =>
+    api.createAndSaveReport(reportType, startDate, endDate).then(r => r[1]),
 }
