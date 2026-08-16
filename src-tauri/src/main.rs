@@ -267,6 +267,22 @@ fn clear_record_project(
         .is_ok()
 }
 
+#[tauri::command]
+fn get_hourly_heatmap_for_range(
+    state: tauri::State<'_, Arc<Mutex<MonitorState>>>,
+    start_date: String,
+    end_date: String,
+) -> Vec<HourlyHeatmapEntry> {
+    state
+        .lock()
+        .unwrap()
+        .db
+        .lock()
+        .unwrap()
+        .get_hourly_heatmap_for_range(&start_date, &end_date)
+        .unwrap_or_default()
+}
+
 fn main() {
     let db = Database::new().expect("Failed to create database");
     db.repair_abnormal_records().ok();
@@ -388,7 +404,8 @@ fn main() {
             generate_report,
             get_work_sessions,
             set_record_project,
-            clear_record_project
+            clear_record_project,
+            get_hourly_heatmap_for_range
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
