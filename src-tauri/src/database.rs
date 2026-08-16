@@ -1335,6 +1335,45 @@ impl Database {
         Ok(entries)
     }
 
+    pub fn get_hourly_heatmap_for_range(&self, start_date: &str, end_date: &str) -> Result<Vec<HourlyHeatmapEntry>> {
+        let start_obj = NaiveDate::parse_from_str(start_date, "%Y-%m-%d").map_err(|_| {
+            rusqlite::Error::InvalidParameterName("Invalid start date".to_string())
+        })?;
+        let end_obj = NaiveDate::parse_from_str(end_date, "%Y-%m-%d").map_err(|_| {
+            rusqlite::Error::InvalidParameterName("Invalid end date".to_string())
+        })?;
+
+        let start_dt = start_obj.and_hms_opt(0, 0, 0)
+            .ok_or_else(|| rusqlite::Error::InvalidParameterName("Invalid start datetime".to_string()))?;
+        let end_dt = end_obj.and_hms_opt(23, 59, 59)
+            .ok_or_else(|| rusqlite::Error::InvalidParameterName("Invalid end datetime".to_string()))?;
+
+        let start_str = Self::format_datetime(&start_dt);
+        let end_str = Self::format_datetime(&end_dt);
+
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT date(start_time) as date,
+                   CAST(strftime('%H', start_time) AS INTEGER) as hour,
+                   SUM(duration_seconds) as duration_seconds
+            FROM usage_records
+            WHERE start_time >= ?1 AND start_time <= ?2
+            GROUP BY date(start_time), strftime('%H', start_time)
+            ORDER BY date(start_time) ASC, strftime('%H', start_time) ASC
+            "#,
+        )?;
+
+        let results = stmt.query_map(params![start_str, end_str], |row| {
+            Ok(HourlyHeatmapEntry {
+                date: row.get(0)?,
+                hour: row.get(1)?,
+                duration_seconds: row.get(2)?,
+            })
+        })?;
+
+        results.collect()
+    }
+
     pub fn _get_update_info(&self) -> Result<(Option<String>, Option<String>)> {
         let result: Result<(Option<String>, Option<String>), _> = self.conn.query_row(
             "SELECT skip_version, last_check FROM update_info WHERE id = 1",
