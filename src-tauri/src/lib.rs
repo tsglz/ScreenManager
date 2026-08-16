@@ -1,4 +1,5 @@
 pub mod database;
+pub mod session_aggregator;
 pub mod window_monitor;
 pub mod autostart;
 pub mod tray;
