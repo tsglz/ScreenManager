@@ -73,7 +73,7 @@ function WorkTimeline() {
   const loadSessions = async () => {
     setLoading(true)
     try {
-      const data = await (api as any).getWorkSessions(range.start, range.end)
+      const data = await api.getWorkSessions(range.start, range.end)
       setSessions(data)
       setSessionRecords({})
       setExpanded(null)
@@ -118,13 +118,13 @@ function WorkTimeline() {
   }
 
   const onSaveProject = async (rid: number, project: string) => {
-    const ok = await (api as any).setRecordProject(rid, project)
+    const ok = await api.setRecordProject(rid, project)
     setEditing(null)
     if (ok) await loadSessions()
   }
 
   const onClearProject = async (rid: number) => {
-    await (api as any).clearRecordProject(rid)
+    await api.clearRecordProject(rid)
     setEditing(null)
     await loadSessions()
   }
