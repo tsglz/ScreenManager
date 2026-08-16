@@ -158,8 +158,4 @@ export const api = {
 
   exportReportToFile: (id: number, filePath: string) =>
     invoke<boolean>('export_report_to_file', { id, filePath }),
-
-  // 兼容 alias，待所有调用点迁移后删除（Task 6 处理）
-  generateReport: (reportType: string, startDate: string, endDate: string) =>
-    api.createAndSaveReport(reportType, startDate, endDate).then(r => r[1]),
 }
