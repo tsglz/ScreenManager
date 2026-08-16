@@ -1,3 +1,4 @@
+use chrono::NaiveDate;
 use screen_manager_lib::database::{CategoryStats, Database, UsageRecord, DateStats};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
@@ -150,10 +151,46 @@ fn build_prompt(report_type: &str, context: &str) -> String {
     )
 }
 
-pub async fn generate_report(
+fn days_between(a: &str, b: &str) -> i64 {
+    let da = NaiveDate::parse_from_str(a, "%Y-%m-%d").ok();
+    let db = NaiveDate::parse_from_str(b, "%Y-%m-%d").ok();
+    match (da, db) {
+        (Some(a), Some(b)) => (b - a).num_days(),
+        _ => 0,
+    }
+}
+
+fn periodicity_and_title(report_type: &str, start: &str, end: &str) -> (&'static str, String) {
+    let days = days_between(start, end) + 1;
+    let periodicity = if days <= 1 {
+        "daily"
+    } else if days <= 31 {
+        "weekly"
+    } else {
+        "monthly"
+    };
+    let type_name = match report_type {
+        "standard" => "标准",
+        "tech" => "技术",
+        "project" => "项目",
+        "concise" => "简洁",
+        "pomodoro" => "番茄钟",
+        _ => "工作",
+    };
+    let title = if periodicity == "daily" {
+        format!("{}日报 · {}", type_name, start)
+    } else if periodicity == "weekly" {
+        format!("{}周报 · {} ~ {}", type_name, start, end)
+    } else {
+        format!("{}月报 · {}", type_name, &start[..7])
+    };
+    (periodicity, title)
+}
+
+pub async fn generate_and_save_report(
     db: &Arc<Mutex<Database>>,
     params: GenerateReportParams,
-) -> Result<String, String> {
+) -> Result<(i64, String), String> {
     let data = {
         let db_guard = db.lock().map_err(|e| format!("DB lock error: {}", e))?;
         let total = db_guard.get_range_total(&params.start_date, &params.end_date)
@@ -218,5 +255,16 @@ pub async fn generate_report(
         .await
         .map_err(|e| format!("解析 Ollama 响应失败: {}", e))?;
 
-    Ok(ollama_resp.response)
+    let content_md = ollama_resp.response;
+
+    let (periodicity, title) = periodicity_and_title(&params.report_type, &params.start_date, &params.end_date);
+
+    let report_id = {
+        let db_guard = db.lock().map_err(|e| format!("DB lock error: {}", e))?;
+        db_guard
+            .insert_or_update_report(&params.report_type, periodicity, &params.start_date, &params.end_date, &title, &content_md)
+            .map_err(|e| format!("保存报告失败: {}", e))?
+    };
+
+    Ok((report_id, content_md))
 }
