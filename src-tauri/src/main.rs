@@ -8,8 +8,11 @@ use tauri::{async_runtime, Manager};
 //use tauri_plugin_updater::UpdaterExt;
 
 use screen_manager_lib::config::{self, AppConfig};
-use screen_manager_lib::database::{Database, DateStats, WeekStats, UsageRecord, CategoryStats, HourlyHeatmapEntry, Report, ReportListItem, ReportListResult};
-use screen_manager_lib::ollama::{self, GenerateReportParams};
+use screen_manager_lib::database::{
+    CategoryStats, CleanupResult, Database, DateStats, HourlyHeatmapEntry, Report,
+    ReportListResult, StorageStats, UsageRecord, WeekStats,
+};
+use screen_manager_lib::ollama;
 use screen_manager_lib::session_aggregator::{WorkSession, aggregate_sessions};
 use screen_manager_lib::scheduler::start_scheduler;
 use screen_manager_lib::tray::{create_tray, hide_window_on_close};
@@ -192,10 +195,130 @@ async fn create_and_save_report(
     report_type: String,
     start_date: String,
     end_date: String,
+    model: Option<String>,
 ) -> Result<(i64, String), String> {
-    let params = ollama::GenerateReportParams { report_type, start_date, end_date };
+    let params = ollama::GenerateReportParams { report_type, start_date, end_date, model };
     let db = state.lock().unwrap().db.clone();
     ollama::generate_and_save_report(&db, params).await
+}
+
+#[tauri::command]
+async fn list_ollama_models() -> Result<Vec<ollama::OllamaModelInfo>, String> {
+    ollama::list_ollama_models().await
+}
+
+#[tauri::command]
+async fn probe_ollama_ready(model: Option<String>) -> Result<(), String> {
+    // 快速健康检查：Ollama 是否启动 + 目标模型是否存在
+    let resolved = ollama::resolve_model(model.as_deref());
+    let _ = ollama::probe_ollama_before_generate(&resolved).await?;
+    Ok(())
+}
+
+// ===== 应用记录 / 工作时间线 =====
+
+#[tauri::command]
+fn get_records_for_date_range(
+    state: tauri::State<'_, Arc<Mutex<MonitorState>>>,
+    start_date: String,
+    end_date: String,
+    limit: usize,
+) -> Vec<UsageRecord> {
+    state
+        .lock()
+        .unwrap()
+        .db
+        .lock()
+        .unwrap()
+        .get_records_for_date_range(&start_date, &end_date, limit)
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+fn get_records_between_datetimes(
+    state: tauri::State<'_, Arc<Mutex<MonitorState>>>,
+    start_iso: String,
+    end_iso: String,
+    limit: usize,
+) -> Vec<UsageRecord> {
+    state
+        .lock()
+        .unwrap()
+        .db
+        .lock()
+        .unwrap()
+        .get_records_between_datetimes(&start_iso, &end_iso, limit)
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+fn get_app_usage_between_datetimes(
+    state: tauri::State<'_, Arc<Mutex<MonitorState>>>,
+    start_iso: String,
+    end_iso: String,
+) -> Vec<(String, i64)> {
+    state
+        .lock()
+        .unwrap()
+        .db
+        .lock()
+        .unwrap()
+        .get_app_usage_between_datetimes(&start_iso, &end_iso)
+        .unwrap_or_default()
+}
+
+// ===== 存储占用统计 & 过期数据清理 =====
+
+const DEFAULT_CLEANUP_DAYS: i64 = 10;
+
+#[tauri::command]
+fn get_storage_stats(
+    state: tauri::State<'_, Arc<Mutex<MonitorState>>>,
+) -> StorageStats {
+    state
+        .lock()
+        .unwrap()
+        .db
+        .lock()
+        .unwrap()
+        .get_storage_stats(DEFAULT_CLEANUP_DAYS)
+        .unwrap_or(StorageStats {
+            db_file_bytes: 0,
+            db_file_path: String::new(),
+            table_rows: vec![],
+            earliest_record_date: None,
+            latest_record_date: None,
+            cleanup_cutoff_days: DEFAULT_CLEANUP_DAYS,
+            cleanup_cutoff_date: String::new(),
+            cleanup_usage_rows: 0,
+            cleanup_daily_rows: 0,
+        })
+}
+
+#[tauri::command]
+fn cleanup_expired_records(
+    state: tauri::State<'_, Arc<Mutex<MonitorState>>>,
+    older_than_days: Option<i64>,
+) -> CleanupResult {
+    let days = older_than_days
+        .map(|d| std::cmp::max(1, d))
+        .unwrap_or(DEFAULT_CLEANUP_DAYS);
+    state
+        .lock()
+        .unwrap()
+        .db
+        .lock()
+        .unwrap()
+        .cleanup_expired_records(days)
+        .unwrap_or(CleanupResult {
+            cutoff_date: String::new(),
+            cutoff_days: days,
+            deleted_usage_rows: 0,
+            deleted_daily_rows: 0,
+            db_size_before_bytes: 0,
+            db_size_after_bytes: 0,
+            saved_bytes: 0,
+        })
 }
 
 #[tauri::command]
@@ -491,6 +614,13 @@ fn main() {
             clear_record_project,
             get_hourly_heatmap_for_range,
             create_and_save_report,
+            list_ollama_models,
+            probe_ollama_ready,
+            get_records_for_date_range,
+            get_records_between_datetimes,
+            get_app_usage_between_datetimes,
+            get_storage_stats,
+            cleanup_expired_records,
             list_reports,
             get_report,
             delete_report,

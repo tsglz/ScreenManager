@@ -50,6 +50,238 @@
   background: var(--accent);
 }
 
+/* ===== Model Select Dropdown ===== */
+.gr-model-select {
+  position: relative;
+  z-index: 30;
+}
+
+.gr-model-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--accent-light);
+  padding: 6px 12px;
+  border: 1px solid transparent;
+  border-radius: 20px;
+  font-size: 12px;
+  color: var(--accent);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s, transform 0.15s;
+  font-family: inherit;
+}
+
+.gr-model-trigger:hover {
+  background: color-mix(in srgb, var(--accent-light) 92%, var(--accent) 8%);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.gr-model-trigger.open {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.gr-model-name {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gr-model-caret {
+  font-size: 10px;
+  transition: transform 0.2s;
+  opacity: 0.7;
+}
+
+.gr-model-caret.up {
+  transform: rotate(180deg);
+}
+
+.gr-model-tip {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
+  white-space: nowrap;
+  z-index: 35;
+  animation: gr-fade-in 0.2s ease-out;
+}
+
+.gr-model-dropdown {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  width: 360px;
+  max-width: calc(100vw - 48px);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg), 0 12px 32px rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+  animation: gr-fade-in 0.15s ease-out;
+}
+
+@keyframes gr-fade-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.gr-model-dropdown-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-card) 95%, var(--accent-light) 5%);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.gr-model-refresh-btn {
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+  transition: background 0.2s;
+  font-family: inherit;
+}
+
+.gr-model-refresh-btn:hover:not(:disabled) {
+  background: var(--accent-light);
+}
+
+.gr-model-refresh-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.gr-model-error {
+  padding: 10px 14px;
+  background: color-mix(in srgb, #fca5a5 14%, transparent);
+  color: #b91c1c;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+  white-space: normal;
+  word-break: break-word;
+}
+
+.gr-model-empty {
+  padding: 20px 16px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.gr-model-list {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.gr-model-option {
+  position: relative;
+  padding: 10px 32px 10px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.gr-model-option:hover {
+  background: var(--hover);
+}
+
+.gr-model-option.active {
+  background: var(--accent-light);
+  color: var(--accent);
+}
+
+.gr-model-option-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.gr-model-option.active .gr-model-option-main {
+  color: var(--accent);
+}
+
+.gr-model-option-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 230px;
+}
+
+.gr-model-option-tag {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--tag-bg);
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.gr-model-option-sub {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.gr-model-check {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.gr-model-dropdown-footer {
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-card) 95%, var(--accent-light) 5%);
+}
+
+.gr-model-default-btn {
+  width: 100%;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  background: var(--bg-card);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+  font-family: inherit;
+}
+
+.gr-model-default-btn:hover {
+  background: var(--accent-light);
+  border-color: var(--accent);
+}
+
 /* ===== Content ===== */
 .gr-content {
   padding: 24px;

@@ -1,4 +1,4 @@
-use chrono::{Datelike, Local, NaiveDate, NaiveDateTime};
+use chrono::{Datelike, Duration as ChronoDur, Local, NaiveDate, NaiveDateTime};
 use rusqlite::{params, Connection, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -44,6 +44,15 @@ pub struct WeekStats {
 pub struct CategoryStats {
     pub category_name: String,
     pub duration_seconds: i64,
+}
+
+/// 单应用在所选时间范围内的聚合统计（含出现次数，避免AI自行估算）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppAggStat {
+    pub process_name: String,
+    pub total_seconds: i64,
+    /// usage_records 中该应用出现的记录条数（一条记录即"启动一次会话片段"）
+    pub record_count: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -418,6 +427,7 @@ impl Database {
             ("Cyberpunk2077.exe", "Steam游戏"),
             ("eurotrucks2.exe", "Steam游戏"),
             ("Card Shop Simulator Prologue.exe", "Steam游戏"),
+            ("SurvivalLog.exe", "Steam游戏"),
             // 游戏娱乐
             ("EpicGamesLauncher.exe", "游戏娱乐"),
             ("battle.net.exe", "游戏娱乐"),
@@ -1324,17 +1334,21 @@ impl Database {
     }
 
     pub fn get_date_range_stats(&self, start_date: &str, end_date: &str) -> Result<Vec<DateStats>> {
+        let (start_dt, end_dt) = self.get_range_start_end_dt(start_date, end_date)?;
+        let start_str = Self::format_datetime(&start_dt);
+        let end_str = Self::format_datetime(&end_dt);
+
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT date, SUM(duration_seconds) as total_duration
-            FROM daily_summary
-            WHERE date >= ?1 AND date <= ?2
-            GROUP BY date
-            ORDER BY date ASC
+            SELECT date(start_time) as d, COALESCE(SUM(duration_seconds), 0) as total_duration
+            FROM usage_records
+            WHERE start_time >= ?1 AND start_time <= ?2
+            GROUP BY date(start_time)
+            ORDER BY d ASC
             "#,
         )?;
 
-        let results = stmt.query_map(params![start_date, end_date], |row| {
+        let results = stmt.query_map(params![start_str, end_str], |row| {
             Ok(DateStats {
                 date: row.get(0)?,
                 total_duration: row.get(1)?,
@@ -1345,16 +1359,55 @@ impl Database {
     }
 
     fn get_date_range_total(&self, start_date: String, end_date: String) -> Result<i64> {
+        let (start_dt, end_dt) = self.get_range_start_end_dt(&start_date, &end_date)?;
+        let start_str = Self::format_datetime(&start_dt);
+        let end_str = Self::format_datetime(&end_dt);
+
         let mut stmt = self.conn.prepare(
             r#"
             SELECT COALESCE(SUM(duration_seconds), 0)
-            FROM daily_summary
-            WHERE date >= ?1 AND date <= ?2
+            FROM usage_records
+            WHERE start_time >= ?1 AND start_time <= ?2
             "#,
         )?;
 
-        let result: i64 = stmt.query_row(params![start_date, end_date], |row| row.get(0))?;
+        let result: i64 = stmt.query_row(params![start_str, end_str], |row| row.get(0))?;
         Ok(result)
+    }
+
+    /// 将 "YYYY-MM-DD" 形式的起止日期转换为精确的 NaiveDateTime 区间：
+    /// - start：当天 00:00:00
+    /// - end：如果 end_date == 今天，则截止到**当前时间**；否则截止到当天 23:59:59
+    /// 这样"生成今日报告"时能准确输出从当日 0:00 到当前时间的工作日志。
+    fn get_range_start_end_dt(
+        &self,
+        start_date: &str,
+        end_date: &str,
+    ) -> Result<(NaiveDateTime, NaiveDateTime)> {
+        let start_obj = NaiveDate::parse_from_str(start_date, "%Y-%m-%d").map_err(|_| {
+            rusqlite::Error::InvalidParameterName("Invalid start date".to_string())
+        })?;
+        let end_obj = NaiveDate::parse_from_str(end_date, "%Y-%m-%d").map_err(|_| {
+            rusqlite::Error::InvalidParameterName("Invalid end date".to_string())
+        })?;
+
+        let start_dt = start_obj
+            .and_hms_opt(0, 0, 0)
+            .ok_or_else(|| rusqlite::Error::InvalidParameterName("Invalid start datetime".to_string()))?;
+
+        let today = Local::now().date_naive();
+        let end_dt = if end_obj == today {
+            Local::now().naive_local()
+        } else {
+            end_obj
+                .and_hms_opt(23, 59, 59)
+                .ok_or_else(|| rusqlite::Error::InvalidParameterName("Invalid end datetime".to_string()))?
+        };
+
+        // 防止用户输入 start > end 时出现反向区间，兜底裁剪
+        let end_dt = end_dt.max(start_dt);
+
+        Ok((start_dt, end_dt))
     }
 
     fn format_datetime(dt: &NaiveDateTime) -> String {
@@ -1397,18 +1450,7 @@ impl Database {
     }
 
     pub fn get_hourly_heatmap_for_range(&self, start_date: &str, end_date: &str) -> Result<Vec<HourlyHeatmapEntry>> {
-        let start_obj = NaiveDate::parse_from_str(start_date, "%Y-%m-%d").map_err(|_| {
-            rusqlite::Error::InvalidParameterName("Invalid start date".to_string())
-        })?;
-        let end_obj = NaiveDate::parse_from_str(end_date, "%Y-%m-%d").map_err(|_| {
-            rusqlite::Error::InvalidParameterName("Invalid end date".to_string())
-        })?;
-
-        let start_dt = start_obj.and_hms_opt(0, 0, 0)
-            .ok_or_else(|| rusqlite::Error::InvalidParameterName("Invalid start datetime".to_string()))?;
-        let end_dt = end_obj.and_hms_opt(23, 59, 59)
-            .ok_or_else(|| rusqlite::Error::InvalidParameterName("Invalid end datetime".to_string()))?;
-
+        let (start_dt, end_dt) = self.get_range_start_end_dt(start_date, end_date)?;
         let start_str = Self::format_datetime(&start_dt);
         let end_str = Self::format_datetime(&end_dt);
 
@@ -1449,15 +1491,7 @@ impl Database {
     }
 
     pub fn get_records_for_date_range(&self, start_date: &str, end_date: &str, limit: usize) -> Result<Vec<UsageRecord>> {
-        let start_obj = NaiveDate::parse_from_str(start_date, "%Y-%m-%d").map_err(|_| {
-            rusqlite::Error::InvalidParameterName("Invalid start date".to_string())
-        })?;
-        let end_obj = NaiveDate::parse_from_str(end_date, "%Y-%m-%d").map_err(|_| {
-            rusqlite::Error::InvalidParameterName("Invalid end date".to_string())
-        })?;
-
-        let start_dt = start_obj.and_hms_opt(0, 0, 0).unwrap();
-        let end_dt = end_obj.and_hms_opt(23, 59, 59).unwrap();
+        let (start_dt, end_dt) = self.get_range_start_end_dt(start_date, end_date)?;
         let start_str = Self::format_datetime(&start_dt);
         let end_str = Self::format_datetime(&end_dt);
 
@@ -1485,21 +1519,87 @@ impl Database {
         results.collect()
     }
 
+    /// 按精确 ISO 时间范围查询会话明细（不裁剪到天，不过滤时长，按 start_time 升序）。
+    /// start_iso / end_iso 形如 2025-08-20T09:12:33。
+    pub fn get_records_between_datetimes(
+        &self,
+        start_iso: &str,
+        end_iso: &str,
+        limit: usize,
+    ) -> Result<Vec<UsageRecord>> {
+        let start_str = start_iso.trim().to_string();
+        let end_str = end_iso.trim().to_string();
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, process_name, window_title, start_time, end_time, duration_seconds
+            FROM usage_records
+            WHERE start_time <= ?2 AND end_time >= ?1
+            ORDER BY start_time ASC
+            LIMIT ?3
+            "#,
+        )?;
+        let results = stmt.query_map(params![start_str, end_str, limit], |row| {
+            Ok(UsageRecord {
+                id: row.get(0)?,
+                process_name: row.get(1)?,
+                window_title: row.get(2)?,
+                start_time: row.get(3)?,
+                end_time: row.get(4)?,
+                duration_seconds: row.get(5)?,
+            })
+        })?;
+        results.collect()
+    }
+
+    /// 在精确 ISO 时间范围内，按进程名汇总使用时长（无需 AI，纯 SQL 聚合）。
+    /// 返回 [(process_name, duration_seconds)]，按时长降序。
+    pub fn get_app_usage_between_datetimes(
+        &self,
+        start_iso: &str,
+        end_iso: &str,
+    ) -> Result<Vec<(String, i64)>> {
+        let start_str = start_iso.trim().to_string();
+        let end_str = end_iso.trim().to_string();
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT process_name,
+                   SUM(
+                     MAX(0,
+                       MIN(strftime('%s', end_time),   strftime('%s', ?2))
+                     - MAX(strftime('%s', start_time), strftime('%s', ?1))
+                     )
+                   ) AS overlap
+            FROM usage_records
+            WHERE start_time <= ?2 AND end_time >= ?1
+            GROUP BY process_name
+            HAVING overlap > 0
+            ORDER BY overlap DESC
+            "#,
+        )?;
+        let rows = stmt.query_map(params![start_str, end_str], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        rows.collect()
+    }
+
     pub fn get_range_category_stats(&self, start_date: &str, end_date: &str) -> Result<Vec<CategoryStats>> {
+        let (start_dt, end_dt) = self.get_range_start_end_dt(start_date, end_date)?;
+        let start_str = Self::format_datetime(&start_dt);
+        let end_str = Self::format_datetime(&end_dt);
         let category_map = self.get_app_category_map();
 
         let mut stmt = self.conn.prepare(
             r#"
             SELECT process_name, SUM(duration_seconds) as total
-            FROM daily_summary
-            WHERE date >= ?1 AND date <= ?2
+            FROM usage_records
+            WHERE start_time >= ?1 AND start_time <= ?2
             GROUP BY process_name
             "#,
         )?;
 
         let mut category_totals: std::collections::HashMap<String, i64> =
             std::collections::HashMap::new();
-        let mut results = stmt.query(params![start_date, end_date])?;
+        let mut results = stmt.query(params![start_str, end_str])?;
 
         while let Some(row) = results.next()? {
             let process_name: String = row.get(0)?;
@@ -1520,19 +1620,59 @@ impl Database {
     }
 
     pub fn get_range_top_apps(&self, start_date: &str, end_date: &str, limit: usize) -> Result<Vec<(String, i64)>> {
+        let (start_dt, end_dt) = self.get_range_start_end_dt(start_date, end_date)?;
+        let start_str = Self::format_datetime(&start_dt);
+        let end_str = Self::format_datetime(&end_dt);
+
         let mut stmt = self.conn.prepare(
             r#"
             SELECT process_name, SUM(duration_seconds) as total_duration
-            FROM daily_summary
-            WHERE date >= ?1 AND date <= ?2
+            FROM usage_records
+            WHERE start_time >= ?1 AND start_time <= ?2
             GROUP BY process_name
             ORDER BY total_duration DESC
             LIMIT ?3
             "#,
         )?;
 
-        let results = stmt.query_map(params![start_date, end_date, limit], |row| {
+        let results = stmt.query_map(params![start_str, end_str, limit], |row| {
             Ok((row.get(0)?, row.get(1)?))
+        })?;
+
+        results.collect()
+    }
+
+    /// 按应用聚合：返回总时长 + 出现次数（record_count）。
+    /// 与 get_range_top_apps 不同的是多了"出现次数"，避免模型自行编造频率数据。
+    pub fn get_range_app_stats(
+        &self,
+        start_date: &str,
+        end_date: &str,
+        limit: usize,
+    ) -> Result<Vec<AppAggStat>> {
+        let (start_dt, end_dt) = self.get_range_start_end_dt(start_date, end_date)?;
+        let start_str = Self::format_datetime(&start_dt);
+        let end_str = Self::format_datetime(&end_dt);
+
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT process_name,
+                   SUM(duration_seconds) as total_duration,
+                   COUNT(*) as record_count
+            FROM usage_records
+            WHERE start_time >= ?1 AND start_time <= ?2
+            GROUP BY process_name
+            ORDER BY total_duration DESC
+            LIMIT ?3
+            "#,
+        )?;
+
+        let results = stmt.query_map(params![start_str, end_str, limit], |row| {
+            Ok(AppAggStat {
+                process_name: row.get(0)?,
+                total_seconds: row.get(1)?,
+                record_count: row.get(2)?,
+            })
         })?;
 
         results.collect()
@@ -1835,4 +1975,190 @@ impl Database {
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         Ok(true)
     }
+
+    // ======================================================================
+    // 存储占用统计 & 过期数据清理
+    // ======================================================================
+
+    fn db_path() -> PathBuf {
+        dirs::data_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("ScreenTime")
+            .join("screen_time.db")
+    }
+
+    /// 查询每张表的行数；返回 [(table_name, row_count)]。
+    fn get_table_row_counts(&self) -> Result<Vec<(String, i64)>> {
+        let tables = [
+            "usage_records",
+            "daily_summary",
+            "reports",
+            "app_categories",
+            "categories",
+            "record_project_overrides",
+            "config",
+        ];
+        let mut out = Vec::with_capacity(tables.len());
+        for t in tables {
+            let count: i64 = self.conn.query_row(
+                &format!("SELECT COUNT(*) FROM {}", t),
+                [],
+                |row| row.get(0),
+            ).unwrap_or(0);
+            out.push((t.to_string(), count));
+        }
+        Ok(out)
+    }
+
+    /// 查 usage_records 最早/最晚的 start_time（YYYY-MM-DD），没有则返回 None。
+    fn get_usage_records_date_range(&self) -> Result<(Option<String>, Option<String>)> {
+        let min: Option<String> = self.conn.query_row(
+            "SELECT MIN(substr(start_time, 1, 10)) FROM usage_records",
+            [],
+            |row| row.get(0),
+        ).unwrap_or(None);
+        let max: Option<String> = self.conn.query_row(
+            "SELECT MAX(substr(start_time, 1, 10)) FROM usage_records",
+            [],
+            |row| row.get(0),
+        ).unwrap_or(None);
+        Ok((min, max))
+    }
+
+    /// 统计「N 天之前的过期记录数」（分别统计 usage_records 与 daily_summary）。
+    /// `days_ago` = 10 表示今天往前数第 10 天之前（不含第 10 天当天）。
+    fn count_old_records(&self, days_ago: i64) -> Result<(i64, i64)> {
+        let cutoff = Local::now().date_naive() - ChronoDur::days(std::cmp::max(0, days_ago - 1));
+        // 2026-08-11 23:59:59 即早于 2026-08-12 的记录，即 "10 天之前"（今天 - 10 天 + 1天前一天的 24:00）
+        // 这里用严格小于 cutoff_date_ymd 就可以了，因为我们是用 DATE(start_time) < cutoff_date。
+        let cutoff_str = cutoff.format("%Y-%m-%d").to_string();
+        let usage: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM usage_records WHERE substr(start_time, 1, 10) < ?1",
+            params![cutoff_str],
+            |row| row.get(0),
+        ).unwrap_or(0);
+        let daily: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM daily_summary WHERE date < ?1",
+            params![cutoff_str],
+            |row| row.get(0),
+        ).unwrap_or(0);
+        Ok((usage, daily))
+    }
+
+    /// 清理 days_ago 天之前的记录：
+    /// - DELETE usage_records WHERE start_time DATE < cutoff
+    /// - DELETE daily_summary WHERE date < cutoff
+    /// 返回 (deleted_usage_count, deleted_daily_count)
+    fn delete_records_older_than_days(&self, days_ago: i64) -> Result<(i64, i64)> {
+        let cutoff = Local::now().date_naive() - ChronoDur::days(std::cmp::max(0, days_ago - 1));
+        let cutoff_str = cutoff.format("%Y-%m-%d").to_string();
+
+        let deleted_usage = self.conn.execute(
+            "DELETE FROM usage_records WHERE substr(start_time, 1, 10) < ?1",
+            params![cutoff_str],
+        ).unwrap_or(0) as i64;
+
+        let deleted_daily = self.conn.execute(
+            "DELETE FROM daily_summary WHERE date < ?1",
+            params![cutoff_str],
+        ).unwrap_or(0) as i64;
+
+        // 删除后尝试释放数据库文件空间（把空闲页还给文件系统）。
+        // 失败不影响清理结果，忽略即可。
+        let _ = self.conn.execute_batch("VACUUM; PRAGMA wal_checkpoint(TRUNCATE);");
+
+        Ok((deleted_usage, deleted_daily))
+    }
+}
+
+/// 资源占用统计（按 JSON 返回给前端）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StorageStats {
+    pub db_file_bytes: i64,
+    pub db_file_path: String,
+    pub table_rows: Vec<(String, i64)>,
+    pub earliest_record_date: Option<String>,
+    pub latest_record_date: Option<String>,
+    pub cleanup_cutoff_days: i64,
+    pub cleanup_cutoff_date: String,
+    pub cleanup_usage_rows: i64,
+    pub cleanup_daily_rows: i64,
+}
+
+impl Database {
+    pub fn get_storage_stats(&self, cleanup_cutoff_days: i64) -> Result<StorageStats> {
+        let path = Self::db_path();
+        let db_file_bytes = std::fs::metadata(&path).map(|m| m.len() as i64).unwrap_or(0);
+        let table_rows = self.get_table_row_counts().unwrap_or_default();
+        let (earliest_record_date, latest_record_date) = self.get_usage_records_date_range().unwrap_or((None, None));
+
+        let safe_days = std::cmp::max(1, cleanup_cutoff_days);
+        let cutoff = Local::now().date_naive() - ChronoDur::days(safe_days - 1);
+        let cleanup_cutoff_date = cutoff.format("%Y-%m-%d").to_string();
+        let (cleanup_usage_rows, cleanup_daily_rows) = self.count_old_records(safe_days).unwrap_or((0, 0));
+
+        Ok(StorageStats {
+            db_file_bytes,
+            db_file_path: path.to_string_lossy().to_string(),
+            table_rows,
+            earliest_record_date,
+            latest_record_date,
+            cleanup_cutoff_days: safe_days,
+            cleanup_cutoff_date,
+            cleanup_usage_rows,
+            cleanup_daily_rows,
+        })
+    }
+
+    /// 清理 N 天前的过期数据；返回 CleanupResult。
+    pub fn cleanup_expired_records(&self, older_than_days: i64) -> Result<CleanupResult> {
+        let before = {
+            let path = Self::db_path();
+            std::fs::metadata(&path).map(|m| m.len() as i64).unwrap_or(0)
+        };
+        let (deleted_usage, deleted_daily) = self.delete_records_older_than_days(older_than_days)?;
+        // 再执行一次 VACUUM wal_checkpoint(TRUNCATE) 确保文件收缩
+        let _ = self.conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+        // Windows 下 VACUUM 需要没有其他读事务；失败不影响主流程。
+        let _ = self.conn.execute_batch("VACUUM;");
+        let after = {
+            let path = Self::db_path();
+            std::fs::metadata(&path).map(|m| m.len() as i64).unwrap_or(0)
+        };
+        // 回收 WAL/SHM 临时文件大小
+        let path = Self::db_path();
+        let freed_wal: i64 = ["-wal", "-shm"].iter().filter_map(|suf| {
+            let p = path.with_extension(format!("db{}", suf));
+            match std::fs::metadata(&p) {
+                Ok(m) => Some(m.len() as i64),
+                Err(_) => {
+                    // 清理前可能有，但检查点之后就删了；返回 0 即可
+                    None
+                }
+            }
+        }).sum();
+        let saved_bytes = std::cmp::max(0, before - after) + freed_wal;
+        let safe_days = std::cmp::max(1, older_than_days);
+        let cutoff = Local::now().date_naive() - ChronoDur::days(safe_days - 1);
+        Ok(CleanupResult {
+            cutoff_date: cutoff.format("%Y-%m-%d").to_string(),
+            cutoff_days: safe_days,
+            deleted_usage_rows: deleted_usage,
+            deleted_daily_rows: deleted_daily,
+            db_size_before_bytes: before,
+            db_size_after_bytes: after,
+            saved_bytes,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CleanupResult {
+    pub cutoff_date: String,
+    pub cutoff_days: i64,
+    pub deleted_usage_rows: i64,
+    pub deleted_daily_rows: i64,
+    pub db_size_before_bytes: i64,
+    pub db_size_after_bytes: i64,
+    pub saved_bytes: i64,
 }

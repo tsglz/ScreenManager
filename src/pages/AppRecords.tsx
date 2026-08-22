@@ -29,7 +29,16 @@ const RANK_COLORS = [
   '#a78bfa', '#6b7280', '#3b82f6', '#ec4899', '#14b8a6',
 ]
 
+function todayStr(): string {
+  const d = new Date()
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
 function AppRecords() {
+  const [selectedDate, setSelectedDate] = useState<string>(todayStr())
   const [topApps, setTopApps] = useState<[string, number][]>([])
   const [categoryStats, setCategoryStats] = useState<CategoryStats[]>([])
   const [totalDuration, setTotalDuration] = useState(0)
@@ -37,20 +46,25 @@ function AppRecords() {
 
   useEffect(() => {
     loadData()
-    const interval = setInterval(loadData, 30000)
-    return () => clearInterval(interval)
-  }, [])
+    // 仅当日页面 30s 自动刷新一次，避免历史日期反复请求
+    if (selectedDate === todayStr()) {
+      const interval = setInterval(loadData, 30000)
+      return () => clearInterval(interval)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDate])
 
   const loadData = async () => {
     try {
+      setLoading(true)
       const [apps, categories, total] = await Promise.all([
-        api.getTopAppsToday(10),
-        api.getTodayCategoryStats(),
-        api.getTodayTotalDuration(),
+        api.getDailyTopApps(selectedDate, 10),
+        api.getDailyCategoryStats(selectedDate),
+        api.getDailyTotal(selectedDate),
       ])
-      setTopApps(apps)
+      setTopApps(apps as [string, number][])
       setCategoryStats(categories)
-      setTotalDuration(total)
+      setTotalDuration(Number(total) || 0)
     } catch (error) {
       console.error('Failed to load data:', error)
     } finally {
@@ -60,14 +74,25 @@ function AppRecords() {
 
   const maxDuration = topApps.length > 0 ? topApps[0][1] : 1
   const categoryTotal = categoryStats.reduce((sum, c) => sum + c.duration_seconds, 0)
-  const todayDateStr = new Date().toISOString().split('T')[0]
 
   return (
     <div className="app-records">
       <div className="ar-header">
         <div className="ar-header-left">
           <h1>应用记录</h1>
-          <span className="ar-subtitle">{todayDateStr} · 今日使用详情</span>
+          <div className="ar-header-row">
+            <span className="ar-subtitle">{selectedDate} · 全天使用详情（00:00 – 24:00）</span>
+            <div className="ar-date-picker-wrap">
+              <label className="ar-date-label">选择日期：</label>
+              <input
+                className="ar-date-input"
+                type="date"
+                value={selectedDate}
+                max={todayStr()}
+                onChange={(e) => setSelectedDate(e.target.value)}
+              />
+            </div>
+          </div>
         </div>
         <div className="ar-summary">
           <div className="ar-summary-item">
@@ -86,13 +111,13 @@ function AppRecords() {
         {loading ? (
           <div className="empty-state">加载中...</div>
         ) : topApps.length === 0 ? (
-          <div className="empty-state">今日暂无应用使用记录</div>
+          <div className="empty-state">该日期暂无应用使用记录</div>
         ) : (
           <>
             <div className="ar-card">
               <div className="tw-section-title">
                 <span className="tw-section-bar" />
-                <h2>今日应用 Top 10</h2>
+                <h2>当日应用 Top 10</h2>
                 <span className="heatmap-subtitle">按使用时长排序</span>
               </div>
               <div className="ar-app-list">

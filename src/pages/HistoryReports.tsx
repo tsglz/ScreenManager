@@ -321,6 +321,15 @@ export default function HistoryReports() {
     if (generating) return
     setGenerating(true)
     try {
+      // —— Step 1：快速健康检查（~2s），尽早发现 Ollama 未启动/模型未 pull ——
+      try {
+        await api.probeOllamaReady()
+      } catch (probeErr) {
+        alert(`Ollama 未就绪：${String(probeErr)}`)
+        setGenerating(false)
+        return
+      }
+      // —— Step 2：健康检查通过后再真正调用 AI 生成 ——
       const [_id, _content] = await api.createAndSaveReport(tpl, range.start, range.end)
       setPage(1)
       await refreshList()

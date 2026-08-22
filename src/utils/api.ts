@@ -67,6 +67,41 @@ export interface ReportListResult {
 
 export interface AppConfig {
   http_proxy?: string | null
+  ollama_model?: string | null
+}
+
+export interface OllamaModelInfo {
+  name: string
+  model: string
+  modified_at?: string
+  size?: number
+  digest?: string
+  family?: string
+  parameter_size?: string
+  quantization_level?: string
+  size_human?: string
+}
+
+export interface StorageStats {
+  db_file_bytes: number
+  db_file_path: string
+  table_rows: [string, number][]
+  earliest_record_date?: string | null
+  latest_record_date?: string | null
+  cleanup_cutoff_days: number
+  cleanup_cutoff_date: string
+  cleanup_usage_rows: number
+  cleanup_daily_rows: number
+}
+
+export interface CleanupResult {
+  cutoff_date: string
+  cutoff_days: number
+  deleted_usage_rows: number
+  deleted_daily_rows: number
+  db_size_before_bytes: number
+  db_size_after_bytes: number
+  saved_bytes: number
 }
 
 export const api = {
@@ -148,8 +183,18 @@ export const api = {
   clearRecordProject: (recordId: number) =>
     invoke<boolean>('clear_record_project', { recordId }),
 
-  createAndSaveReport: (reportType: string, startDate: string, endDate: string) =>
-    invoke<[number, string]>('create_and_save_report', { reportType, startDate, endDate }),
+  getRecordsBetweenDatetimes: (startIso: string, endIso: string, limit: number) =>
+    invoke<UsageRecord[]>('get_records_between_datetimes', { startIso, endIso, limit }),
+
+  getAppUsageBetweenDatetimes: (startIso: string, endIso: string) =>
+    invoke<[string, number][]>('get_app_usage_between_datetimes', { startIso, endIso }),
+
+  createAndSaveReport: (reportType: string, startDate: string, endDate: string, model?: string) =>
+    invoke<[number, string]>('create_and_save_report', { reportType, startDate, endDate, model: model ?? null }),
+
+  listOllamaModels: () => invoke<OllamaModelInfo[]>('list_ollama_models'),
+
+  probeOllamaReady: (model?: string) => invoke<void>('probe_ollama_ready', { model: model ?? null }),
 
   listReports: (keyword: string, filterType: string, filterPeriod: string, page: number, pageSize: number) =>
     invoke<ReportListResult>('list_reports', { keyword, filterType, filterPeriod, page, pageSize }),
@@ -166,4 +211,9 @@ export const api = {
   getAppConfig: () => invoke<AppConfig>('get_app_config'),
 
   saveAppConfig: (cfg: AppConfig) => invoke<void>('save_app_config', { cfg }),
+
+  getStorageStats: () => invoke<StorageStats>('get_storage_stats'),
+
+  cleanupExpiredRecords: (olderThanDays?: number) =>
+    invoke<CleanupResult>('cleanup_expired_records', { olderThanDays: olderThanDays ?? null }),
 }

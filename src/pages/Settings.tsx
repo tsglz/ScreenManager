@@ -1,8 +1,26 @@
 import { useState, useEffect } from 'react'
-import { api, type AppConfig } from '../utils/api'
+import { api, type AppConfig, type CleanupResult, type StorageStats } from '../utils/api'
+import { formatBytes } from '../utils/format'
 import { UpdateModal } from '../components/UpdateModal'
 import { useTheme } from '../hooks/useTheme'
 import './Settings.css'
+
+type TableStatRow = [string, number]
+
+const TABLE_NAME_CHINESE: Record<string, string> = {
+  usage_records: '使用明细记录',
+  daily_summary: '按日汇总记录',
+  reports: 'AI 报告',
+  app_categories: '应用分类映射',
+  categories: '分类定义',
+  record_project_overrides: '手动项目归属',
+  config: '配置项',
+}
+
+function formatTableCount(_tableName: string, cnt: number): string {
+  if (cnt < 10_000) return cnt.toLocaleString('zh-CN')
+  return `${(cnt / 10000).toFixed(2)} 万`
+}
 
 export default function Settings() {
   const [autostartEnabled, setAutostartEnabled] = useState(false)
@@ -14,6 +32,14 @@ export default function Settings() {
   const [loading, setLoading] = useState(true)
   const [showUpdateModal, setShowUpdateModal] = useState(false)
   const { theme, toggleTheme } = useTheme()
+
+  // ===== 存储占用 & 清理 =====
+  const [storageStats, setStorageStats] = useState<StorageStats | null>(null)
+  const [storageLoading, setStorageLoading] = useState(false)
+  const [cleaning, setCleaning] = useState(false)
+  const [confirmStage, setConfirmStage] = useState<0 | 1>(0)
+  const [cleanupMsg, setCleanupMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
+  const [lastResult, setLastResult] = useState<CleanupResult | null>(null)
 
   useEffect(() => {
     loadSettings()
@@ -36,6 +62,20 @@ export default function Settings() {
       console.error('Failed to load settings:', error)
     } finally {
       setLoading(false)
+      // 设置加载完成后再拉一次存储统计，与前面无关
+      loadStorageStats()
+    }
+  }
+
+  const loadStorageStats = async () => {
+    try {
+      setStorageLoading(true)
+      const s = await api.getStorageStats()
+      setStorageStats(s)
+    } catch (e) {
+      console.error('Failed to load storage stats:', e)
+    } finally {
+      setStorageLoading(false)
     }
   }
 
@@ -56,7 +96,10 @@ export default function Settings() {
       setProxySaving(true)
       setProxyMsg(null)
       const trimmed = proxyValue.trim()
+      // 先读已有配置，避免覆盖其他配置项（如默认 Ollama 模型）
+      const existing = await api.getAppConfig().catch(() => null)
       const cfg: AppConfig = {
+        ...(existing || {}),
         http_proxy: trimmed.length === 0 ? null : trimmed,
       }
       await api.saveAppConfig(cfg)
@@ -82,6 +125,44 @@ export default function Settings() {
     setProxyMsg(null)
     setShowUpdateModal(true)
   }
+
+  const handleCleanupClick = () => {
+    setCleanupMsg(null)
+    if (confirmStage === 0) {
+      setConfirmStage(1)
+      return
+    }
+    // 二次确认后真正执行
+    void (async () => {
+      try {
+        setCleaning(true)
+        const res = await api.cleanupExpiredRecords()
+        setLastResult(res)
+        setConfirmStage(0)
+        setCleanupMsg({
+          type: 'ok',
+          text: `清理完成：共删除 ${(res.deleted_usage_rows + res.deleted_daily_rows).toLocaleString('zh-CN')} 条记录，释放 ${formatBytes(res.saved_bytes)} 磁盘空间。`,
+        })
+        await loadStorageStats()
+      } catch (e) {
+        console.error(e)
+        setConfirmStage(0)
+        setCleanupMsg({
+          type: 'err',
+          text: e instanceof Error ? `清理失败：${e.message}` : '清理失败，请稍后重试',
+        })
+      } finally {
+        setCleaning(false)
+      }
+    })()
+  }
+
+  // 5 秒后自动把「OK 提示」从界面上拿掉，避免堆积
+  useEffect(() => {
+    if (!cleanupMsg || cleanupMsg.type !== 'ok') return
+    const t = setTimeout(() => setCleanupMsg(null), 8000)
+    return () => clearTimeout(t)
+  }, [cleanupMsg])
 
   if (loading) {
     return <div className="settings-page loading">加载中...</div>
@@ -160,6 +241,127 @@ export default function Settings() {
             <p className={`proxy-msg ${proxyMsg.type}`}>{proxyMsg.text}</p>
           )}
         </div>
+      </section>
+
+      {/* ====== 存储占用 & 清理 ====== */}
+      <section className="settings-section">
+        <div className="storage-head">
+          <h2>数据存储与清理</h2>
+          <button
+            className="btn-refresh"
+            onClick={loadStorageStats}
+            disabled={storageLoading || cleaning}
+          >
+            {storageLoading ? '刷新中...' : '刷新统计'}
+          </button>
+        </div>
+
+        {storageLoading && <div className="storage-hint">正在读取存储信息...</div>}
+
+        {!storageLoading && !storageStats && (
+          <div className="storage-hint">暂时无法读取存储统计，请点击「刷新统计」重试。</div>
+        )}
+
+        {!storageLoading && storageStats && (
+          <>
+            <div className="storage-card">
+              <div className="storage-overview">
+                <div className="storage-metric">
+                  <div className="storage-metric-label">数据库文件</div>
+                  <div className="storage-metric-value-big">
+                    {formatBytes(storageStats.db_file_bytes)}
+                  </div>
+                  <div className="storage-metric-sub" title={storageStats.db_file_path}>
+                    {storageStats.db_file_path || '—'}
+                  </div>
+                </div>
+                <div className="storage-metric">
+                  <div className="storage-metric-label">记录时间范围</div>
+                  <div className="storage-metric-value">
+                    {storageStats.earliest_record_date && storageStats.latest_record_date ? (
+                      <>
+                        {storageStats.earliest_record_date} → {storageStats.latest_record_date}
+                      </>
+                    ) : (
+                      '暂无记录'
+                    )}
+                  </div>
+                  <div className="storage-metric-sub">最早 ~ 最近的使用明细日期</div>
+                </div>
+                <div className="storage-metric warn">
+                  <div className="storage-metric-label">
+                    可清理 {storageStats.cleanup_cutoff_days} 天前数据（{storageStats.cleanup_cutoff_date} 之前）
+                  </div>
+                  <div className="storage-metric-value">
+                    使用明细 {storageStats.cleanup_usage_rows.toLocaleString('zh-CN')} 条
+                    <span className="sep">·</span>
+                    日汇总 {storageStats.cleanup_daily_rows.toLocaleString('zh-CN')} 条
+                  </div>
+                  <div className="storage-metric-sub">AI 报告、应用分类配置、手动项目归属不会被清理</div>
+                </div>
+              </div>
+
+              <div className="storage-table-wrap">
+                <div className="storage-table-title">各表记录数</div>
+                <div className="storage-table">
+                  {(storageStats.table_rows as TableStatRow[]).map(([table, cnt]) => (
+                    <div key={table} className="storage-table-row">
+                      <div className="storage-table-cell left">
+                        <span className="storage-table-cell-name">
+                          {TABLE_NAME_CHINESE[table] || table}
+                        </span>
+                        <span className="storage-table-cell-sys">{table}</span>
+                      </div>
+                      <div className="storage-table-cell right">
+                        {formatTableCount(table, Number(cnt) || 0)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="storage-actions">
+              <div className="storage-actions-left">
+                {cleanupMsg && (
+                  <div className={`cleanup-msg ${cleanupMsg.type}`}>{cleanupMsg.text}</div>
+                )}
+                {!cleanupMsg && lastResult && lastResult.saved_bytes > 0 && (
+                  <div className="cleanup-msg ok muted">
+                    上次清理：{lastResult.cutoff_date} 之前，释放 {formatBytes(lastResult.saved_bytes)}
+                  </div>
+                )}
+                {confirmStage === 1 && (
+                  <div className="cleanup-confirm">
+                    ⚠️ 你即将永久删除 <strong>{storageStats.cleanup_cutoff_date}</strong> 之前的
+                    <strong>{storageStats.cleanup_usage_rows + storageStats.cleanup_daily_rows}</strong>
+                    条旧记录（AI 报告与配置会保留）。该操作不可撤销。
+                  </div>
+                )}
+              </div>
+              <button
+                className={confirmStage === 1 ? 'btn-danger' : 'btn-check-update'}
+                onClick={handleCleanupClick}
+                disabled={
+                  cleaning ||
+                  storageLoading ||
+                  (storageStats.cleanup_usage_rows + storageStats.cleanup_daily_rows <= 0 && confirmStage === 0)
+                }
+                title={
+                  storageStats.cleanup_usage_rows + storageStats.cleanup_daily_rows <= 0
+                    ? '当前没有超过 10 天的旧记录可以清理'
+                    : undefined
+                }
+              >
+                {cleaning
+                  ? '清理中，请稍候...'
+                  : confirmStage === 1
+                  ? `确认删除（${storageStats.cleanup_cutoff_date} 之前）`
+                  : `一键清理 ${storageStats.cleanup_cutoff_days} 天前的过期数据`}
+              </button>
+            </div>
+          </>
+        )}
       </section>
 
       <section className="settings-section">

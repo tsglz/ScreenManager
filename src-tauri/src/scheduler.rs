@@ -71,6 +71,7 @@ pub async fn start_scheduler(db: Arc<Mutex<Database>>) {
                             report_type: "standard".to_string(),
                             start_date: today_str.clone(),
                             end_date: today_str,
+                            model: None,
                         };
                         match ollama::generate_and_save_report(&db_clone, params).await {
                             Ok((id, _)) => eprintln!("[Scheduler][T2] 标准日报已入库, id={}", id),
@@ -98,6 +99,7 @@ pub async fn start_scheduler(db: Arc<Mutex<Database>>) {
                             report_type: "standard".to_string(),
                             start_date: start_str.clone(),
                             end_date: end_str.clone(),
+                            model: None,
                         };
                         match ollama::generate_and_save_report(&db_clone, params).await {
                             Ok((id, _)) => eprintln!(

@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { invoke } from '@tauri-apps/api/core'
 import { api, UsageRecord, WorkSession, ProjectSlice } from '../utils/api'
 import './WorkTimeline.css'
 
 type RangeKey = 'today' | 'week' | 'custom'
 
 type ProjectSlicePct = ProjectSlice & { pct: number }
+
+type AppAggUsage = [string, number] // [process_name, overlap_seconds]
 
 function todayStr(): string {
   const d = new Date()
@@ -86,7 +87,10 @@ function WorkTimeline() {
   const [sessions, setSessions] = useState<WorkSession[]>([])
   const [loading, setLoading] = useState(false)
   const [expanded, setExpanded] = useState<number | null>(null)
+  // 每个会话展开后存两个数据：按应用聚合的使用概况 + 详细记录
+  const [sessionAppUsage, setSessionAppUsage] = useState<Record<number, AppAggUsage[]>>({})
   const [sessionRecords, setSessionRecords] = useState<Record<number, UsageRecord[]>>({})
+  const [sessionLoading, setSessionLoading] = useState<Record<number, boolean>>({})
   const [editing, setEditing] = useState<{ rid: number; init: string } | null>(null)
 
   const range = useMemo(() => {
@@ -100,7 +104,9 @@ function WorkTimeline() {
     try {
       const data = await api.getWorkSessions(range.start, range.end)
       setSessions(data)
+      setSessionAppUsage({})
       setSessionRecords({})
+      setSessionLoading({})
       setExpanded(null)
     } finally {
       setLoading(false)
@@ -118,27 +124,29 @@ function WorkTimeline() {
       return
     }
     setExpanded(idx)
-    if (sessionRecords[idx]) return
     const s = sessions[idx]
     if (!s) return
-    const sd = s.start_time.slice(0, 10)
-    const ed = s.end_time.slice(0, 10)
+    // 已加载过直接用缓存
+    if (sessionAppUsage[idx]) return
+
+    setSessionLoading((m) => ({ ...m, [idx]: true }))
     try {
-      const all = await invoke<UsageRecord[]>('get_records_for_date_range', {
-        startDate: sd,
-        endDate: ed,
-        limit: 1000,
-      })
-      const st = new Date(s.start_time).getTime()
-      const et = new Date(s.end_time).getTime()
-      const inSess = all.filter((r) => {
-        const rs = new Date(r.start_time).getTime()
-        const re = new Date(r.end_time).getTime()
-        return !(re < st || rs > et)
-      })
-      setSessionRecords((m) => ({ ...m, [idx]: inSess }))
-    } catch {
+      // 并行拉：按应用聚合 + 明细记录。
+      // 聚合结果一定优先展示（用户要求"相同内容合并，说明应用+时长"），明细保留给改归属使用。
+      const startIso = s.start_time.includes('T') ? s.start_time : `${s.start_time}T00:00:00`
+      const endIso = s.end_time.includes('T') ? s.end_time : `${s.end_time}T23:59:59`
+      const [agg, records] = await Promise.all([
+        api.getAppUsageBetweenDatetimes(startIso, endIso),
+        api.getRecordsBetweenDatetimes(startIso, endIso, 2000),
+      ])
+      setSessionAppUsage((m) => ({ ...m, [idx]: agg as AppAggUsage[] }))
+      setSessionRecords((m) => ({ ...m, [idx]: records as UsageRecord[] }))
+    } catch (e) {
+      console.error('expandSession error', e)
+      setSessionAppUsage((m) => ({ ...m, [idx]: [] }))
       setSessionRecords((m) => ({ ...m, [idx]: [] }))
+    } finally {
+      setSessionLoading((m) => ({ ...m, [idx]: false }))
     }
   }
 
@@ -222,6 +230,11 @@ function WorkTimeline() {
           const projs: ProjectSlicePct[] = s.projects
             .filter((p: ProjectSlice) => p.seconds > 0)
             .map((p: ProjectSlice) => ({ ...p, pct: (p.seconds / Math.max(s.total_seconds, 1)) * totalPct }))
+          const agg = sessionAppUsage[idx]
+          const records = sessionRecords[idx]
+          const isLoading = sessionLoading[idx]
+          const aggTotal = (agg || []).reduce((a, [, sec]) => a + Number(sec || 0), 0)
+
           return (
             <div key={idx} className={`wt-session ${expanded === idx ? 'open' : ''}`}>
               <div className="wt-session-main" onClick={() => expandSession(idx)}>
@@ -255,67 +268,106 @@ function WorkTimeline() {
                       />
                     ))}
                   </div>
-                  <div className="wt-session-count">{s.record_count} 条记录 · 点击展开</div>
+                  <div className="wt-session-count">
+                    {s.record_count} 条记录{(agg && agg.length > 0) ? ` · ${agg.length} 款应用` : ''} · 点击展开
+                  </div>
                 </div>
               </div>
 
               {expanded === idx && (
                 <div className="wt-session-records">
-                  {sessionRecords[idx] && sessionRecords[idx].length === 0 && (
-                    <div className="wt-hint">会话内无明细记录</div>
+                  {isLoading && <div className="wt-hint">加载会话详情中...</div>}
+
+                  {!isLoading && agg && agg.length === 0 && records && records.length === 0 && (
+                    <div className="wt-hint">该会话暂无应用使用明细</div>
                   )}
-                  {!sessionRecords[idx] && <div className="wt-hint">加载明细中...</div>}
-                  {sessionRecords[idx]?.map((r) => (
-                    <div key={r.id} className="wt-rec">
-                      <div className="wt-rec-time">
-                        {fmtClock(r.start_time)}
+
+                  {!isLoading && agg && agg.length > 0 && (
+                    <div className="wt-agg-block">
+                      <div className="wt-agg-title">会话内应用使用（按总时长排序）</div>
+                      <div className="wt-agg-sub">
+                        共 {agg.length} 款应用 · 会话总重叠时长 {fmtDuration(aggTotal)}
                       </div>
-                      <div className="wt-rec-body">
-                        <div className="wt-rec-app">
-                          {r.process_name} · {fmtDuration(r.duration_seconds)}
-                        </div>
-                        <div className="wt-rec-title">{r.window_title || '(无标题)'}</div>
-                      </div>
-                      <div className="wt-rec-actions">
-                        {(() => {
-                          const isEditingThis = editing?.rid === r.id
-                          const edit = editing
-                          if (isEditingThis) {
-                            return (
-                              <input
-                                className="wt-rec-input"
-                                autoFocus
-                                defaultValue={edit!.init}
-                                onBlur={(e) => onSaveProject(r.id, e.target.value.trim())}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter')
-                                    onSaveProject(r.id, (e.target as HTMLInputElement).value.trim())
-                                  if (e.key === 'Escape') setEditing(null)
-                                }}
-                              />
-                            )
-                          }
+                      <ul className="wt-agg-list">
+                        {agg.map(([app, secs], i) => {
+                          const sec = Number(secs || 0)
+                          const pct = aggTotal > 0 ? (sec / aggTotal) * 100 : 0
+                          const color = projectColor(app)
                           return (
-                            <button
-                              className="wt-rec-btn"
-                              onClick={() =>
-                                setEditing({ rid: r.id, init: '' })
-                              }
-                            >
-                              改归属
-                            </button>
+                            <li key={app} className="wt-agg-item">
+                              <div className="wt-agg-head">
+                                <span className="wt-agg-rank" style={{ background: color }}>
+                                  {i + 1}
+                                </span>
+                                <span className="wt-agg-app">{app}</span>
+                                <span className="wt-agg-dur">{fmtDuration(sec)}</span>
+                                <span className="wt-agg-pct">{pct.toFixed(1)}%</span>
+                              </div>
+                              <div className="wt-agg-bar">
+                                <div
+                                  className="wt-agg-bar-fill"
+                                  style={{ width: `${pct}%`, background: color }}
+                                />
+                              </div>
+                            </li>
                           )
-                        })()}
-                        <button
-                          className="wt-rec-btn wt-rec-btn-ghost"
-                          onClick={() => onClearProject(r.id)}
-                          title="清除手动项目归属"
-                        >
-                          清除
-                        </button>
-                      </div>
+                        })}
+                      </ul>
                     </div>
-                  ))}
+                  )}
+
+                  {!isLoading && records && records.length > 0 && (
+                    <>
+                      <div className="wt-records-title">详细记录（{records.length} 条，可修改项目归属）</div>
+                      {records.map((r) => (
+                        <div key={r.id} className="wt-rec">
+                          <div className="wt-rec-time">{fmtClock(r.start_time)}</div>
+                          <div className="wt-rec-body">
+                            <div className="wt-rec-app">
+                              {r.process_name} · {fmtDuration(r.duration_seconds)}
+                            </div>
+                            <div className="wt-rec-title">{r.window_title || '(无标题)'}</div>
+                          </div>
+                          <div className="wt-rec-actions">
+                            {(() => {
+                              const isEditingThis = editing?.rid === r.id
+                              const edit = editing
+                              if (isEditingThis) {
+                                return (
+                                  <input
+                                    className="wt-rec-input"
+                                    autoFocus
+                                    defaultValue={edit!.init}
+                                    onBlur={(e) => onSaveProject(r.id, e.target.value.trim())}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter')
+                                        onSaveProject(r.id, (e.target as HTMLInputElement).value.trim())
+                                      if (e.key === 'Escape') setEditing(null)
+                                    }}
+                                  />
+                                )
+                              }
+                              return (
+                                <button
+                                  className="wt-rec-btn"
+                                  onClick={() => setEditing({ rid: r.id, init: '' })}
+                                >
+                                  改归属
+                                </button>
+                              )
+                            })()}
+                            <button
+                              className="wt-rec-btn wt-rec-btn-ghost"
+                              onClick={() => onClearProject(r.id)}
+                              title="清除手动项目归属"
+                            >
+                              清除
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </>
+                  )}
                 </div>
               )}
             </div>

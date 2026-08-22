@@ -11,6 +11,11 @@ pub struct AppConfig {
     /// 为 None 或空字符串时表示不设置进程级代理。
     #[serde(default)]
     pub http_proxy: Option<String>,
+
+    /// 生成报告时默认使用的 Ollama 模型名（如 "qwen3:4b-fp16"）。
+    /// 为 None 或空时回退到代码内置的默认模型。
+    #[serde(default)]
+    pub ollama_model: Option<String>,
 }
 
 pub fn get_config_path() -> PathBuf {
@@ -51,6 +56,10 @@ pub fn save_config(cfg: &AppConfig) -> Result<(), String> {
     Ok(())
 }
 
+/// 本地地址白名单：这些地址始终直连，不走代理。
+/// 解决配置代理后导致连不上本地 Ollama (127.0.0.1:11434) 的问题。
+const NO_PROXY_HOSTS: &str = "localhost,127.0.0.1,::1,0.0.0.0";
+
 /// 将配置中的代理应用到进程环境变量（HTTP_PROXY / HTTPS_PROXY）。
 /// 由于 reqwest / plugin-updater 均会在运行时读取这些变量，
 /// 必须在执行任何网络请求之前（main 函数入口早期）调用一次。
@@ -64,7 +73,10 @@ pub fn apply_proxy_env(cfg: &AppConfig) {
     // 部分库（含部分 reqwest 配置）读的是全小写版本
     env::set_var("http_proxy", proxy);
     env::set_var("https_proxy", proxy);
-    eprintln!("[Config] 已应用进程代理: {}", proxy);
+    // 本地地址（Ollama 等）始终直连，避免代理拦截
+    env::set_var("NO_PROXY", NO_PROXY_HOSTS);
+    env::set_var("no_proxy", NO_PROXY_HOSTS);
+    eprintln!("[Config] 已应用进程代理: {}（本地地址 {} 直连）", proxy, NO_PROXY_HOSTS);
 }
 
 /// 运行时切换代理并立即生效（设置页面点保存时调用）。
@@ -75,12 +87,17 @@ pub fn set_proxy_at_runtime(proxy: Option<String>) {
         env::remove_var("HTTPS_PROXY");
         env::remove_var("http_proxy");
         env::remove_var("https_proxy");
+        env::remove_var("NO_PROXY");
+        env::remove_var("no_proxy");
         eprintln!("[Config] 已清除进程代理");
     } else {
         env::set_var("HTTP_PROXY", &p);
         env::set_var("HTTPS_PROXY", &p);
         env::set_var("http_proxy", &p);
         env::set_var("https_proxy", &p);
-        eprintln!("[Config] 已实时应用代理: {}", p);
+        // 本地地址（Ollama 等）始终直连，避免代理拦截
+        env::set_var("NO_PROXY", NO_PROXY_HOSTS);
+        env::set_var("no_proxy", NO_PROXY_HOSTS);
+        eprintln!("[Config] 已实时应用代理: {}（本地地址 {} 直连）", p, NO_PROXY_HOSTS);
     }
 }

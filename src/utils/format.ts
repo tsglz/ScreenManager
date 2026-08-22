@@ -117,3 +117,17 @@ export function getPreviousWeekEnd(): string {
 export function getDayNames(): string[] {
   return ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
 }
+
+/** 以 1024 为单位把字节数格式化成 B/KB/MB/GB/TB，保留 1~2 位小数。 */
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let i = 0
+  let n = bytes
+  while (n >= 1024 && i < units.length - 1) {
+    n /= 1024
+    i += 1
+  }
+  const digits = i === 0 ? 0 : n >= 100 ? 1 : 2
+  return `${n.toFixed(digits)} ${units[i]}`
+}
