@@ -434,6 +434,7 @@ impl Database {
             ("riotclientservices.exe", "游戏娱乐"),
             ("LeagueClient.exe", "游戏娱乐"),
             ("minecraft.exe", "游戏娱乐"),
+            ("steamwebhelper.exe", "游戏娱乐"),
             // 音乐
             ("cloudmusic.exe", "音乐"),
             ("spotify.exe", "音乐"),
@@ -480,6 +481,8 @@ impl Database {
             ("SystemSettings.exe", "系统工具"),
             ("regedit.exe", "系统工具"),
             ("SnippingTool.exe", "系统工具"),
+            // 锁屏
+            ("LockApp.exe", "锁屏"),
             // ScreenManager
             ("screen-manager.exe", "ScreenManager"),
             ];
@@ -1756,6 +1759,59 @@ impl Database {
             params![record_id],
         )?;
         Ok(())
+    }
+
+    /// 按进程名批量设置项目归属：把指定日期范围内所有 process_name 匹配的记录都设为同一项目
+    pub fn set_project_by_process_name(
+        &self,
+        process_name: &str,
+        project: &str,
+        start_date: &str,
+        end_date: &str,
+    ) -> Result<usize> {
+        let now = Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+        let start_dt = format!("{}T00:00:00", start_date);
+        let end_dt = format!("{}T23:59:59", end_date);
+        let n = self.conn.execute(
+            r#"
+            INSERT INTO record_project_overrides (record_id, project, source, updated_at)
+            SELECT ur.id, ?1, 'user', ?2
+            FROM usage_records ur
+            WHERE ur.process_name = ?3
+              AND ur.start_time >= ?4
+              AND ur.start_time <= ?5
+            ON CONFLICT(record_id) DO UPDATE SET
+                project = excluded.project,
+                source = 'user',
+                updated_at = excluded.updated_at
+            "#,
+            params![project, now, process_name, start_dt, end_dt],
+        )?;
+        Ok(n)
+    }
+
+    /// 按进程名批量清除项目归属
+    pub fn clear_project_by_process_name(
+        &self,
+        process_name: &str,
+        start_date: &str,
+        end_date: &str,
+    ) -> Result<usize> {
+        let start_dt = format!("{}T00:00:00", start_date);
+        let end_dt = format!("{}T23:59:59", end_date);
+        let n = self.conn.execute(
+            r#"
+            DELETE FROM record_project_overrides
+            WHERE record_id IN (
+                SELECT id FROM usage_records
+                WHERE process_name = ?1
+                  AND start_time >= ?2
+                  AND start_time <= ?3
+            )
+            "#,
+            params![process_name, start_dt, end_dt],
+        )?;
+        Ok(n)
     }
 
     pub fn get_config_value(&self, key: &str) -> Option<String> {

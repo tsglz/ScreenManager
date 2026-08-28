@@ -91,7 +91,8 @@ function WorkTimeline() {
   const [sessionAppUsage, setSessionAppUsage] = useState<Record<number, AppAggUsage[]>>({})
   const [sessionRecords, setSessionRecords] = useState<Record<number, UsageRecord[]>>({})
   const [sessionLoading, setSessionLoading] = useState<Record<number, boolean>>({})
-  const [editing, setEditing] = useState<{ rid: number; init: string } | null>(null)
+  const [editing, setEditing] = useState<{ rid: number; init: string; currentProject: string } | null>(null)
+  const [syncMsg, setSyncMsg] = useState<string | null>(null)
 
   const range = useMemo(() => {
     if (rangeKey === 'today') return { start: todayStr(), end: todayStr() }
@@ -150,22 +151,31 @@ function WorkTimeline() {
     }
   }
 
-  const onSaveProject = async (rid: number, project: string) => {
-    const ok = await api.setRecordProject(rid, project)
+  const onSaveProject = async (_rid: number, processName: string, project: string) => {
     setEditing(null)
-    if (ok) await loadSessions()
+    if (!project) return // 空输入不保存，等同取消
+    // 批量同步：同一进程名在当前日期范围内的所有记录都设为同一项目
+    const n = await api.setProjectByProcessName(processName, project, range.start, range.end)
+    setSyncMsg(`已同步 ${n} 条「${processName}」记录为项目「${project}」`)
+    await loadSessions()
+    setTimeout(() => setSyncMsg(null), 4000)
   }
 
-  const onClearProject = async (rid: number) => {
-    await api.clearRecordProject(rid)
+  const onClearProject = async (_rid: number, processName: string) => {
+    const n = await api.clearProjectByProcessName(processName, range.start, range.end)
     setEditing(null)
+    setSyncMsg(`已清除 ${n} 条「${processName}」记录的项目归属`)
     await loadSessions()
+    setTimeout(() => setSyncMsg(null), 4000)
   }
 
   const totalSec = sessions.reduce((a, s) => a + s.total_seconds, 0)
 
   return (
     <div className="worktimeline-page">
+      {syncMsg && (
+        <div className="wt-sync-msg">{syncMsg}</div>
+      )}
       <div className="wt-header">
         <h1>工作时间线</h1>
         <div className="wt-summary">
@@ -318,7 +328,9 @@ function WorkTimeline() {
 
                   {!isLoading && records && records.length > 0 && (
                     <>
-                      <div className="wt-records-title">详细记录（{records.length} 条，可修改项目归属）</div>
+                      <div className="wt-records-title">
+                        详细记录（{records.length} 条 · 点击「标项目」为记录指定项目归属，影响报告中的项目维度统计）
+                      </div>
                       {records.map((r) => (
                         <div key={r.id} className="wt-rec">
                           <div className="wt-rec-time">{fmtClock(r.start_time)}</div>
@@ -334,32 +346,42 @@ function WorkTimeline() {
                               const edit = editing
                               if (isEditingThis) {
                                 return (
-                                  <input
-                                    className="wt-rec-input"
-                                    autoFocus
-                                    defaultValue={edit!.init}
-                                    onBlur={(e) => onSaveProject(r.id, e.target.value.trim())}
-                                    onKeyDown={(e) => {
-                                      if (e.key === 'Enter')
-                                        onSaveProject(r.id, (e.target as HTMLInputElement).value.trim())
-                                      if (e.key === 'Escape') setEditing(null)
-                                    }}
-                                  />
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                    {edit!.currentProject && (
+                                      <span className="wt-rec-project-hint">
+                                        当前：{edit!.currentProject}
+                                      </span>
+                                    )}
+                                    <input
+                                      className="wt-rec-input"
+                                      autoFocus
+                                      defaultValue={edit!.init}
+                                      placeholder="输入项目名，如：ScreenManager"
+                                      onBlur={(e) => onSaveProject(r.id, r.process_name, e.target.value.trim())}
+                                      onKeyDown={(e) => {
+                                        if (e.key === 'Enter')
+                                          onSaveProject(r.id, r.process_name, (e.target as HTMLInputElement).value.trim())
+                                        if (e.key === 'Escape') setEditing(null)
+                                      }}
+                                    />
+                                  </div>
                                 )
                               }
+                              const currentProj = s.main_project
                               return (
                                 <button
                                   className="wt-rec-btn"
-                                  onClick={() => setEditing({ rid: r.id, init: '' })}
+                                  onClick={() => setEditing({ rid: r.id, init: '', currentProject: currentProj })}
+                                  title={`为这条记录指定项目归属（当前会话主项目：${currentProj}）`}
                                 >
-                                  改归属
+                                  标项目
                                 </button>
                               )
                             })()}
                             <button
                               className="wt-rec-btn wt-rec-btn-ghost"
-                              onClick={() => onClearProject(r.id)}
-                              title="清除手动项目归属"
+                              onClick={() => onClearProject(r.id, r.process_name)}
+                              title="清除该记录及同名进程的手动项目归属，恢复自动推断"
                             >
                               清除
                             </button>

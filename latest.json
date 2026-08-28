@@ -1,11 +1,11 @@
 {
-  "version": "2.1.0",
-  "notes": "v2.1.0 功能更新\n\n 新增功能\n\n1. 报告生成支持 Ollama 模型选择与健康检查\n   • 生成报告前可选择本地 Ollama 已拉取的模型\n   • 生成前自动执行健康检查，避免服务未启动导致的静默失败\n\n2. 工作时间线新增应用使用聚合\n   • 按会话维度聚合应用使用情况，时间线数据更完整\n\n3. 存储统计与过期数据清理\n   • 新增存储占用统计，直观展示本地数据体积\n   • 支持一键清理过期数据，释放磁盘空间\n\n4. 应用记录页面新增日期选择器\n   • 可自由选择任意日期查看当天的应用使用记录\n\n5. 新增 formatBytes 工具函数\n   • 统一字节数格式化显示逻辑，替代各处手写转换\n\n6. 代理 NO_PROXY 白名单\n   • 本地服务（Ollama、localhost 等）默认直连，避免代理误拦截\n\n\n 代码与配置优化\n\n\n7. AppRecords 组件重构\n   • 重写 AppRecords，支持任意日期范围查询，摆脱固定日期限制\n\n8. 新功能界面样式补充\n   • 为上述新增功能补齐对应的 UI 样式\n\n\n Bug 修复\n\n\n9. 修复 vite alias 配置问题，并为 dev server 增加 target ignore，避免本地开发调试异常\n\n\n 升级提示\n\n\n• 生成报告依赖本地 Ollama 服务（http://localhost:11434），请确保 Ollama 已启动并已拉取所需模型\n• 若开启了系统代理，本地服务请求已通过 NO_PROXY 白名单自动直连，无需手动放行",
-  "pub_date": "2026-08-17T12:00:00Z",
+  "version": "2.1.1",
+  "notes": "v2.1.1 功能更新\n\n 新增功能\n\n1. AI 报告 5 种模板差异化渲染\n   • standard（标准）/ tech（技术）/ project（项目）/ concise（简洁）/ pomodoro（番茄钟）5 种模板现在拥有完全不同的报告区块\n   • 程序决定渲染哪些 section、Top N 取多少，不依赖模型区分，弱模型也不会出现千篇一律的报告\n   • tech 模板额外显示「开发类占比」和「开发工具分类明细」\n   • project 模板额外显示「未标记项目占比」和「项目投入排名」\n   • concise 模板精简为 Top 5 应用 + 建议，overview ≤ 80 字\n   • pomodoro 模板只保留专注时段 Top 15，弱化应用/分类\n\n2. 本周节奏表\n   • 按天展示日期、星期、时长、环比昨日、Top 3 应用、最长专注段\n   • Top 3 应用来自 SQL 全量聚合（get_daily_top_apps），不是样本\n   • 周报/月报按日期展开，日报单行显示\n\n3. 环比上周对比表\n   • 5 项指标对比：总时长、日均、专注段数、开发类占比、分心类占比\n   • 带 ±%/pp 和 ↑↓ 箭头，一眼看出趋势\n   • 仅周报/月报渲染，日报不显示\n\n4. 报告新增「下周关注/明日关注」段\n   • 程序根据未标记占比、分心占比、开发环比变化、会话数变化等规则自动生成 4-5 条候选清单\n   • 模型只能在候选范围内写短概括，不会凭空编造项目名或数字\n   • 4 层兜底保证占位符永远不会露出\n\n\n 架构优化\n\n\n5. 报告生成提示词按周期×模板分支\n   • daily/weekly/monthly 3 档措辞不同\n   • 5 种模板各有专属建议偏置\n   • JSON 输出从 2 字段升级为 3 字段（overview / suggestions / outlook），4 层容错解析\n\n6. README 全面刷新\n   • 报告类型从 5 种日报扩展为 5×3=15 种组合矩阵\n   • 修正 Top 50 描述：澄清活动记录只是样本（120/300/500 条），正文排名来自 SQL 聚合，不存在稀释问题\n   • 逐项列出每个数据维度的权威来源\n\n\n 升级提示\n\n\n• 本版本报告生成能力大幅增强，建议选周报日期范围 + 不同模板各试一次\n• 生成报告依赖本地 Ollama 服务（http://localhost:11434），请确保 Ollama 已启动并已拉取所需模型",
+  "pub_date": "2026-08-28T12:00:00Z",
   "platforms": {
     "windows-x86_64": {
-      "url": "https://github.com/tsglz/ScreenManager/releases/download/v2.1.0/ScreenManager_2.1.0_x64-setup.exe",
-      "signature": "https://github.com/tsglz/ScreenManager/releases/download/v2.1.0/ScreenManager_2.1.0_x64-setup.exe.sig"
+      "url": "https://github.com/tsglz/ScreenManager/releases/download/v2.1.1/ScreenManager_2.1.1_x64-setup.exe",
+      "signature": "https://github.com/tsglz/ScreenManager/releases/download/v2.1.1/ScreenManager_2.1.1_x64-setup.exe.sig"
     }
   }
 }

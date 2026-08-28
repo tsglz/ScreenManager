@@ -183,6 +183,12 @@ export const api = {
   clearRecordProject: (recordId: number) =>
     invoke<boolean>('clear_record_project', { recordId }),
 
+  setProjectByProcessName: (processName: string, project: string, startDate: string, endDate: string) =>
+    invoke<number>('set_project_by_process_name', { processName, project, startDate, endDate }),
+
+  clearProjectByProcessName: (processName: string, startDate: string, endDate: string) =>
+    invoke<number>('clear_project_by_process_name', { processName, startDate, endDate }),
+
   getRecordsBetweenDatetimes: (startIso: string, endIso: string, limit: number) =>
     invoke<UsageRecord[]>('get_records_between_datetimes', { startIso, endIso, limit }),
 

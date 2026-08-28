@@ -458,6 +458,41 @@ fn clear_record_project(
 }
 
 #[tauri::command]
+fn set_project_by_process_name(
+    state: tauri::State<'_, Arc<Mutex<MonitorState>>>,
+    process_name: String,
+    project: String,
+    start_date: String,
+    end_date: String,
+) -> usize {
+    state
+        .lock()
+        .unwrap()
+        .db
+        .lock()
+        .unwrap()
+        .set_project_by_process_name(&process_name, &project, &start_date, &end_date)
+        .unwrap_or(0)
+}
+
+#[tauri::command]
+fn clear_project_by_process_name(
+    state: tauri::State<'_, Arc<Mutex<MonitorState>>>,
+    process_name: String,
+    start_date: String,
+    end_date: String,
+) -> usize {
+    state
+        .lock()
+        .unwrap()
+        .db
+        .lock()
+        .unwrap()
+        .clear_project_by_process_name(&process_name, &start_date, &end_date)
+        .unwrap_or(0)
+}
+
+#[tauri::command]
 fn get_hourly_heatmap_for_range(
     state: tauri::State<'_, Arc<Mutex<MonitorState>>>,
     start_date: String,
@@ -612,6 +647,8 @@ fn main() {
             get_work_sessions,
             set_record_project,
             clear_record_project,
+            set_project_by_process_name,
+            clear_project_by_process_name,
             get_hourly_heatmap_for_range,
             create_and_save_report,
             list_ollama_models,
