@@ -413,7 +413,7 @@ fn get_work_sessions(
         .unwrap_or(300);
 
     let db = state.lock().unwrap().db.clone();
-    let (records, overrides) = {
+    let (records, overrides, app_categories) = {
         let dbg = db.lock().unwrap();
         let recs = dbg
             .get_records_for_range_ordered(&start_date, &end_date)
@@ -421,9 +421,16 @@ fn get_work_sessions(
         let ovs = dbg
             .get_overrides_for_range(&start_date, &end_date)
             .unwrap_or_default();
-        (recs, ovs)
+        // 构建进程名(小写)→分类名映射，传给聚合器完成分类→项目归属回退
+        let mut cats = std::collections::HashMap::new();
+        if let Ok(all) = dbg.get_all_categories() {
+            for (p, c) in all {
+                cats.insert(p.to_lowercase(), c);
+            }
+        }
+        (recs, ovs, cats)
     };
-    aggregate_sessions(records, overrides, idle_threshold, switch_threshold)
+    aggregate_sessions(records, overrides, app_categories, idle_threshold, switch_threshold)
 }
 
 #[tauri::command]

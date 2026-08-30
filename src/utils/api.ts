@@ -43,6 +43,8 @@ export interface WorkSession {
   main_project: string
   projects: ProjectSlice[]
   record_count: number
+  /** 快速切屏标记：会话<5分钟、非锁屏、后面有另一段会话切换 */
+  quick_switch?: boolean
 }
 
 export interface ReportListItem {

@@ -428,6 +428,7 @@ impl Database {
             ("eurotrucks2.exe", "Steam游戏"),
             ("Card Shop Simulator Prologue.exe", "Steam游戏"),
             ("SurvivalLog.exe", "Steam游戏"),
+            ("Patrick's Parabox.exe", "Steam游戏"),
             // 游戏娱乐
             ("EpicGamesLauncher.exe", "游戏娱乐"),
             ("battle.net.exe", "游戏娱乐"),

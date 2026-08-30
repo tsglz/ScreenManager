@@ -17,10 +17,24 @@ pub struct WorkSession {
     pub main_project: String,
     pub projects: Vec<ProjectSlice>,
     pub record_count: i32,
+    /// 快速切屏标记：会话时长 < 5 分钟、非锁屏、后面紧接另一段会话（换项目/空闲断）
+    #[serde(default)]
+    pub quick_switch: bool,
+}
+
+/// 判断进程名是否为浏览器（用于相似归属指纹：浏览器忽略窗口标题细节）
+fn is_browser_process(process: &str) -> bool {
+    let lower = process.to_lowercase();
+    const BROWSER_KEYWORDS: &[&str] = &[
+        "chrome", "chromium", "msedge", "firefox", "opera", "brave", "vivaldi",
+        "360se", "360chrome", "qqbrowser", "sogouexplorer", "liebao", "maxthon",
+        "ucbrowser", "waterfox", "palemoon",
+    ];
+    BROWSER_KEYWORDS.iter().any(|kw| lower.contains(kw))
 }
 
 /// 从窗口标题解析项目名。仅对已知开发工具类进程尝试解析。
-/// 解析不到返回 None，由聚合器并入会话主导项目。
+/// 解析不到返回 None，由聚合器并入会话主导项目或回退到应用分类。
 pub fn extract_project(process_name: &str, window_title: &str) -> Option<String> {
     let lower = process_name.to_lowercase();
     let title = window_title.trim();
@@ -65,8 +79,6 @@ pub fn extract_project(process_name: &str, window_title: &str) -> Option<String>
                 && !candidate.to_lowercase().contains("sublime")
                 && !candidate.to_lowercase().contains("eclipse")
             {
-                // 若末段是应用名而二段是项目名，则二段即答案；
-                // 若只有两段且末段像项目名（不含以上关键词），也取二段。
                 return Some(candidate.to_string());
             }
         }
@@ -74,11 +86,29 @@ pub fn extract_project(process_name: &str, window_title: &str) -> Option<String>
     None
 }
 
+/// 计算一条记录的「归属指纹」：用于相似记录自动归类
+/// - 浏览器：只看进程名（忽略标签页细节，符合需求 2）
+/// - 开发工具且能 extract_project：进程名 + "|" + 项目名
+/// - 其他：只看进程名
+fn attribution_fingerprint(process: &str, title: &str) -> String {
+    let lower = process.to_lowercase();
+    if is_browser_process(process) {
+        return lower;
+    }
+    if let Some(proj) = extract_project(process, title) {
+        return format!("{}|{}", lower, proj);
+    }
+    lower
+}
+
 /// 将 usage_records（需已按 start_time ASC 排序）聚合为工作会话。
-/// overrides: record_id -> (project, source)；优先级：override > extract_project > "其他"
+/// - overrides: record_id -> (project, source)；显示覆盖最高优先级，source=user 的会被用于相似传播
+/// - app_categories: 进程名（小写）→ 分类名；用于任务 1：分类名 → 项目归属（查不到才标其他）
+/// 项目归属优先级：① 显式 override → ② override 同源指纹自动传播 → ③ extract_project（开发工具精确定位）→ ④ 应用分类名 → ⑤ "其他"
 pub fn aggregate_sessions(
     records: Vec<UsageRecord>,
     overrides: HashMap<i64, (String, String)>,
+    app_categories: HashMap<String, String>,
     idle_threshold_secs: i64,
     switch_threshold_secs: i64,
 ) -> Vec<WorkSession> {
@@ -86,28 +116,62 @@ pub fn aggregate_sessions(
         return Vec::new();
     }
 
-    // Step 1: 每条记录确定 project，构建带 project 的记录
+    // ======== 阶段 0：构建「指纹 → 项目」自动传播规则（来自 source=user 的显式 override） ========
+    // 先建 id -> record 反查
+    let record_by_id: HashMap<i64, &UsageRecord> = records.iter().map(|r| (r.id, r)).collect();
+    let mut fp_rules: HashMap<String, String> = HashMap::new();
+    for (rid, (project, source)) in &overrides {
+        if source != "user" {
+            continue; // 只从用户明确操作中学习规则，不传播系统/自动来源
+        }
+        if let Some(rec) = record_by_id.get(rid) {
+            let fp = attribution_fingerprint(&rec.process_name, &rec.window_title);
+            // 同一条指纹如果已经有冲突的项目，先到者胜（通常不会冲突）
+            fp_rules.entry(fp).or_insert_with(|| project.clone());
+        }
+    }
+
+    // ======== 阶段 1：每条记录确定 project，构建带 project 的记录 ========
     let mut enriched: Vec<(UsageRecord, String)> = Vec::with_capacity(records.len());
     for rec in records {
-        let project = if let Some((p, _)) = overrides.get(&rec.id) {
-            p.clone()
-        } else if let Some(p) = extract_project(&rec.process_name, &rec.window_title) {
+        // 优先级 1：显式 override
+        let from_override = overrides.get(&rec.id).map(|(p, _)| p.clone());
+        let project = if let Some(p) = from_override {
             p
         } else {
-            "其他".to_string()
+            // 优先级 2：指纹自动传播（用户修改过同类归属的记录 → 同指纹自动套用）
+            let fp = attribution_fingerprint(&rec.process_name, &rec.window_title);
+            if let Some(p) = fp_rules.get(&fp) {
+                p.clone()
+            } else {
+                // 优先级 3：extract_project（开发工具精确项目名）
+                if let Some(p) = extract_project(&rec.process_name, &rec.window_title) {
+                    p
+                } else {
+                    // 优先级 4：应用分类名（Steam游戏、浏览器、社交通讯…）；查不到最终才"其他"
+                    let key = rec.process_name.to_lowercase();
+                    if let Some(cat) = app_categories.get(&key) {
+                        if cat != "其他" {
+                            cat.clone()
+                        } else {
+                            "其他".to_string()
+                        }
+                    } else {
+                        "其他".to_string()
+                    }
+                }
+            }
         };
         enriched.push((rec, project));
     }
 
-    // Step 2: 遍历构建会话
+    // ======== 阶段 2：遍历构建会话（原有逻辑保持不变） ========
     let mut sessions: Vec<WorkSession> = Vec::new();
     let mut current_start: Option<String> = None;
     let mut current_end: Option<String> = None;
     let mut current_total: i64 = 0;
     let mut current_record_count: i32 = 0;
-    // 会话内各 project 累计秒数；None 代表"未归类"，算 main_project 权重时归 main
     let mut current_projects: HashMap<String, i64> = HashMap::new();
-    // 除了 current_projects，额外跟踪"非主导的新项目累计时长"用于换项目判定
     let mut previous_end_dt: Option<NaiveDateTime> = None;
 
     for (rec, project) in enriched.iter() {
@@ -136,7 +200,6 @@ pub fn aggregate_sessions(
                 break_now = true;
             } else {
                 // 换项目断点：本条 project 不是当前主导，且该 project 在会话内累计超过阈值
-                // 先计算当前主导（临时）
                 let cur_main = find_main_project(&current_projects);
                 if project != &cur_main && project != "其他" {
                     let acc_in_session = *current_projects.get(project).unwrap_or(&0) + dur;
@@ -158,6 +221,7 @@ pub fn aggregate_sessions(
                 main_project,
                 projects: projects_slices,
                 record_count: current_record_count,
+                quick_switch: false, // 阶段 3 统一判定
             });
             current_total = 0;
             current_record_count = 0;
@@ -187,7 +251,27 @@ pub fn aggregate_sessions(
             main_project,
             projects: projects_slices,
             record_count: current_record_count,
+            quick_switch: false,
         });
+    }
+
+    // ======== 阶段 3：标记「快速切屏」会话（任务 3） ========
+    // 条件：一段工作进行不到 5 分钟就切换到下一个工作，锁屏除外
+    const QUICK_SWITCH_THRESHOLD_SECS: i64 = 300;
+    let n = sessions.len();
+    for i in 0..n {
+        let is_last = i == n - 1;
+        let main_proj = &sessions[i].main_project;
+        // 锁屏不算工作
+        if main_proj == "锁屏" {
+            continue;
+        }
+        let too_short = sessions[i].total_seconds < QUICK_SWITCH_THRESHOLD_SECS;
+        // 非末尾：后面还有会话 → 算切换
+        let has_next = !is_last;
+        if too_short && has_next {
+            sessions[i].quick_switch = true;
+        }
     }
 
     sessions
@@ -233,9 +317,11 @@ mod tests {
         }
     }
 
+    fn empty_cat_map() -> HashMap<String, String> { HashMap::new() }
+
+    // --- extract_project 回归测试 ---
     #[test]
     fn extract_project_vscode_title() {
-        // VSCode: <file> - <project> - Visual Studio Code
         let r = extract_project(
             "Code.exe",
             "main.rs - ScreenManager - Visual Studio Code",
@@ -261,51 +347,229 @@ mod tests {
         assert_eq!(r, None);
     }
 
+    // --- 任务 1：分类名 → 项目归属 ---
+    #[test]
+    fn project_from_category_game() {
+        // Steam游戏：extract_project 返回 None → 用分类名
+        let records = vec![
+            rec(1, "Patrick's Parabox.exe", "Patrick's Parabox",
+                "2026-08-16T09:00:00", "2026-08-16T09:30:00", 1800),
+        ];
+        let mut cats = HashMap::new();
+        cats.insert("patrick's parabox.exe".to_string(), "Steam游戏".to_string());
+        let r = aggregate_sessions(records, HashMap::new(), cats, 900, 300);
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].main_project, "Steam游戏");
+    }
+
+    #[test]
+    fn project_from_category_browser() {
+        let records = vec![
+            rec(1, "chrome.exe", "资料 - Google Chrome",
+                "2026-08-16T09:00:00", "2026-08-16T09:10:00", 600),
+        ];
+        let mut cats = HashMap::new();
+        cats.insert("chrome.exe".to_string(), "浏览器".to_string());
+        let r = aggregate_sessions(records, HashMap::new(), cats, 900, 300);
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].main_project, "浏览器");
+    }
+
+    #[test]
+    fn project_from_category_wechat() {
+        let records = vec![
+            rec(1, "wechat.exe", "微信",
+                "2026-08-16T09:00:00", "2026-08-16T09:05:00", 300),
+        ];
+        let mut cats = HashMap::new();
+        cats.insert("wechat.exe".to_string(), "社交通讯".to_string());
+        let r = aggregate_sessions(records, HashMap::new(), cats, 900, 300);
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].main_project, "社交通讯");
+    }
+
+    #[test]
+    fn project_extract_over_category() {
+        // Code.exe：extract_project("ScreenManager") 优先级高于 分类"开发工具"
+        let records = vec![
+            rec(1, "Code.exe", "main.rs - ScreenManager - Visual Studio Code",
+                "2026-08-16T09:00:00", "2026-08-16T09:30:00", 1800),
+        ];
+        let mut cats = HashMap::new();
+        cats.insert("code.exe".to_string(), "开发工具".to_string());
+        let r = aggregate_sessions(records, HashMap::new(), cats, 900, 300);
+        assert_eq!(r[0].main_project, "ScreenManager");
+    }
+
+    #[test]
+    fn project_fallback_category_for_dev_without_title() {
+        // Code.exe 空标题 extract_project=None → 回退到分类 "开发工具"
+        let records = vec![
+            rec(1, "Code.exe", "",
+                "2026-08-16T09:00:00", "2026-08-16T09:30:00", 1800),
+        ];
+        let mut cats = HashMap::new();
+        cats.insert("code.exe".to_string(), "开发工具".to_string());
+        let r = aggregate_sessions(records, HashMap::new(), cats, 900, 300);
+        assert_eq!(r[0].main_project, "开发工具");
+    }
+
+    // --- 任务 2：相似记录自动归类（指纹传播） ---
+    #[test]
+    fn fp_propagate_browser_by_process_only() {
+        // 3 条 chrome 记录，只有 id=1 被用户标为 "资料搜索"
+        // id=2 和 id=3 都应自动被传播到 "资料搜索"（忽略窗口标题）
+        let records = vec![
+            rec(1, "chrome.exe", "文档A - Google Chrome",
+                "2026-08-16T09:00:00", "2026-08-16T09:10:00", 600),
+            rec(2, "chrome.exe", "完全不同的页面 - Google Chrome",
+                "2026-08-16T09:10:00", "2026-08-16T09:20:00", 600),
+            rec(3, "chrome.exe", "又一个页面 - Google Chrome",
+                "2026-08-16T09:20:00", "2026-08-16T09:30:00", 600),
+        ];
+        let mut overrides = HashMap::new();
+        overrides.insert(1, ("资料搜索".to_string(), "user".to_string()));
+        let mut cats = HashMap::new();
+        cats.insert("chrome.exe".to_string(), "浏览器".to_string());
+        let r = aggregate_sessions(records, overrides, cats, 900, 300);
+        // 都在一个会话里，主导项目应该是 "资料搜索"（不是 "浏览器"）
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].main_project, "资料搜索");
+    }
+
+    #[test]
+    fn fp_propagate_dev_tool_by_process_plus_project() {
+        // Code.exe: id=1 是 ScreenManager 被用户改为 "屏幕管理项目"
+        // id=2 也是 ScreenManager 窗口 → 自动传播；id=3 是 OtherProj → 不受影响
+        let records = vec![
+            rec(1, "Code.exe", "a.rs - ScreenManager - VSCode",
+                "2026-08-16T09:00:00", "2026-08-16T09:10:00", 600),
+            rec(2, "Code.exe", "b.rs - ScreenManager - VSCode",
+                "2026-08-16T09:10:00", "2026-08-16T09:20:00", 600),
+            rec(3, "Code.exe", "c.rs - OtherProj - VSCode",
+                "2026-08-16T09:20:00", "2026-08-16T09:30:00", 600),
+        ];
+        let mut overrides = HashMap::new();
+        overrides.insert(1, ("屏幕管理项目".to_string(), "user".to_string()));
+        let mut cats = HashMap::new();
+        cats.insert("code.exe".to_string(), "开发工具".to_string());
+        // switch_threshold=1 → 每个项目累计超 1 秒就断，方便观察三段各自的 main_project
+        let r = aggregate_sessions(records, overrides, cats, 900, 1);
+        // 至少 2 段：屏幕管理项目（id1+id2 合并或不合并，project 都是 "屏幕管理项目"）+ OtherProj
+        let all_main: Vec<&str> = r.iter().map(|s| s.main_project.as_str()).collect();
+        assert!(all_main.contains(&"屏幕管理项目"), "all_main={:?}", all_main);
+        assert!(all_main.contains(&"OtherProj"), "all_main={:?}", all_main);
+    }
+
+    #[test]
+    fn fp_propagate_nonuser_source_ignored() {
+        // source != "user" 的 override 不参与传播学习
+        let records = vec![
+            rec(1, "chrome.exe", "A",
+                "2026-08-16T09:00:00", "2026-08-16T09:10:00", 600),
+            rec(2, "chrome.exe", "B",
+                "2026-08-16T09:10:00", "2026-08-16T09:20:00", 600),
+        ];
+        let mut overrides = HashMap::new();
+        overrides.insert(1, ("临时分类".to_string(), "system".to_string()));
+        let mut cats = HashMap::new();
+        cats.insert("chrome.exe".to_string(), "浏览器".to_string());
+        // 阈值足够大，确保"项目切换"本身不会切开会话（这一测只验证"指纹传播规则学习"）
+        let r = aggregate_sessions(records, overrides, cats, 900, 3600);
+        // id=1 显式 override=临时分类；id=2 无指纹传播→回退到分类"浏览器"
+        // 会话内 projects 应同时出现 "临时分类" 和 "浏览器"
+        assert_eq!(r.len(), 1);
+        let projs: Vec<&str> = r[0].projects.iter().map(|p| p.name.as_str()).collect();
+        assert!(projs.contains(&"临时分类"), "projs={:?}", projs);
+        assert!(projs.contains(&"浏览器"), "projs={:?}", projs);
+    }
+
+    // --- 任务 3：快速切屏 ---
+    #[test]
+    fn quick_switch_marked_short_session() {
+        // 会话 A: 2 分钟（<5 分钟，非锁屏）→ 快速切屏
+        // 会话 B: 20 分钟（空闲 20 分钟隔断）→ 正常
+        let records = vec![
+            rec(1, "Code.exe", "a.rs - A - VSCode",
+                "2026-08-16T09:00:00", "2026-08-16T09:02:00", 120),
+            rec(2, "Code.exe", "b.rs - B - VSCode",
+                "2026-08-16T09:22:00", "2026-08-16T09:42:00", 1200), // 间隔 20 分钟 > 15 空闲阈值
+        ];
+        let r = aggregate_sessions(records, HashMap::new(), empty_cat_map(), 900, 1);
+        assert_eq!(r.len(), 2);
+        assert!(r[0].quick_switch, "会话A应被标记快速切屏");
+        assert!(!r[1].quick_switch, "会话B是最后一段，不标记");
+    }
+
+    #[test]
+    fn lock_screen_not_quick_switch() {
+        // 锁屏 2 分钟 + 后续切其他：锁屏段不标记
+        let records = vec![
+            rec(1, "LockApp.exe", "",
+                "2026-08-16T09:00:00", "2026-08-16T09:02:00", 120),
+            rec(2, "Code.exe", "a.rs - A - VSCode",
+                "2026-08-16T09:22:00", "2026-08-16T09:42:00", 1200),
+        ];
+        let mut cats = HashMap::new();
+        cats.insert("lockapp.exe".to_string(), "锁屏".to_string());
+        let r = aggregate_sessions(records, HashMap::new(), cats, 900, 1);
+        assert_eq!(r.len(), 2);
+        assert!(!r[0].quick_switch, "锁屏段即使很短也不算快速切屏");
+    }
+
+    #[test]
+    fn long_session_not_quick_switch() {
+        // 一段刚好 = 5 分钟（=300s）不触发 <5 分钟判定
+        // 用不同 project 确保两段会被分开：Code(extract) vs WeChat(分类)
+        let records = vec![
+            rec(1, "Code.exe", "a.rs - AProject - VSCode",
+                "2026-08-16T09:00:00", "2026-08-16T09:05:00", 300),
+            rec(2, "wechat.exe", "",
+                "2026-08-16T09:20:00", "2026-08-16T09:25:00", 300),
+        ];
+        let mut cats = HashMap::new();
+        cats.insert("wechat.exe".to_string(), "社交通讯".to_string());
+        let r = aggregate_sessions(records, HashMap::new(), cats, 900, 1);
+        assert_eq!(r.len(), 2);
+        assert!(!r[0].quick_switch, "刚好 300 秒不算 <5 分钟");
+    }
+
+    // --- 原有回归 ---
     #[test]
     fn aggregate_empty() {
-        let r = aggregate_sessions(vec![], HashMap::new(), 900, 300);
+        let r = aggregate_sessions(vec![], HashMap::new(), empty_cat_map(), 900, 300);
         assert!(r.is_empty());
     }
 
     #[test]
     fn aggregate_single_session_no_gaps() {
         let records = vec![
-            rec(
-                1, "Code.exe", "main.rs - ScreenManager - Visual Studio Code",
-                "2026-08-16T09:00:00", "2026-08-16T09:30:00", 1800,
-            ),
-            rec(
-                2, "chrome.exe", "资料搜索 - Google Chrome",
-                "2026-08-16T09:30:00", "2026-08-16T09:32:00", 120,
-            ),
-            rec(
-                3, "Code.exe", "lib.rs - ScreenManager - Visual Studio Code",
-                "2026-08-16T09:32:00", "2026-08-16T10:00:00", 1680,
-            ),
+            rec(1, "Code.exe", "main.rs - ScreenManager - Visual Studio Code",
+                "2026-08-16T09:00:00", "2026-08-16T09:30:00", 1800),
+            rec(2, "chrome.exe", "资料搜索 - Google Chrome",
+                "2026-08-16T09:30:00", "2026-08-16T09:32:00", 120),
+            rec(3, "Code.exe", "lib.rs - ScreenManager - Visual Studio Code",
+                "2026-08-16T09:32:00", "2026-08-16T10:00:00", 1680),
         ];
-        let r = aggregate_sessions(records, HashMap::new(), 900, 300);
+        let mut cats = HashMap::new();
+        cats.insert("chrome.exe".to_string(), "浏览器".to_string());
+        let r = aggregate_sessions(records, HashMap::new(), cats, 900, 300);
         assert_eq!(r.len(), 1);
-        let s = &r[0];
-        assert_eq!(s.main_project, "ScreenManager");
-        assert_eq!(s.total_seconds, 1800 + 120 + 1680);
-        assert_eq!(s.record_count, 3);
-        assert!(s.projects.iter().any(|p| p.name == "其他" && p.seconds == 120));
+        assert_eq!(r[0].main_project, "ScreenManager");
+        assert_eq!(r[0].total_seconds, 1800 + 120 + 1680);
+        assert_eq!(r[0].record_count, 3);
+        assert!(r[0].projects.iter().any(|p| p.name == "浏览器" && p.seconds == 120));
     }
 
     #[test]
     fn aggregate_idle_break() {
         let records = vec![
-            rec(
-                1, "Code.exe", "main.rs - ScreenManager - Visual Studio Code",
-                "2026-08-16T09:00:00", "2026-08-16T09:30:00", 1800,
-            ),
-            // 间隔 20 分钟 > 15min → 断会话
-            rec(
-                2, "Code.exe", "work.rs - OtherProj - Visual Studio Code",
-                "2026-08-16T09:50:00", "2026-08-16T10:20:00", 1800,
-            ),
+            rec(1, "Code.exe", "main.rs - ScreenManager - Visual Studio Code",
+                "2026-08-16T09:00:00", "2026-08-16T09:30:00", 1800),
+            rec(2, "Code.exe", "work.rs - OtherProj - Visual Studio Code",
+                "2026-08-16T09:50:00", "2026-08-16T10:20:00", 1800),
         ];
-        let r = aggregate_sessions(records, HashMap::new(), 900, 300);
+        let r = aggregate_sessions(records, HashMap::new(), empty_cat_map(), 900, 300);
         assert_eq!(r.len(), 2);
         assert_eq!(r[0].main_project, "ScreenManager");
         assert_eq!(r[1].main_project, "OtherProj");
@@ -313,72 +577,35 @@ mod tests {
 
     #[test]
     fn aggregate_short_cross_not_break() {
-        // 切到别的项目不足 5 分钟 → 不视为换任务
         let records = vec![
-            rec(
-                1, "Code.exe", "a.rs - ProjectA - Visual Studio Code",
-                "2026-08-16T09:00:00", "2026-08-16T09:30:00", 1800,
-            ),
-            rec(
-                2, "Code.exe", "b.rs - ProjectB - Visual Studio Code",
-                "2026-08-16T09:30:00", "2026-08-16T09:33:00", 180, // 3 min < 5min
-            ),
-            rec(
-                3, "Code.exe", "c.rs - ProjectA - Visual Studio Code",
-                "2026-08-16T09:33:00", "2026-08-16T10:00:00", 1620,
-            ),
+            rec(1, "Code.exe", "a.rs - ProjectA - Visual Studio Code",
+                "2026-08-16T09:00:00", "2026-08-16T09:30:00", 1800),
+            rec(2, "Code.exe", "b.rs - ProjectB - Visual Studio Code",
+                "2026-08-16T09:30:00", "2026-08-16T09:33:00", 180),
+            rec(3, "Code.exe", "c.rs - ProjectA - Visual Studio Code",
+                "2026-08-16T09:33:00", "2026-08-16T10:00:00", 1620),
         ];
-        let r = aggregate_sessions(records, HashMap::new(), 900, 300);
+        let r = aggregate_sessions(records, HashMap::new(), empty_cat_map(), 900, 300);
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].main_project, "ProjectA");
     }
 
     #[test]
-    fn aggregate_switch_break() {
-        // 新项目累计超 5 分钟 → 断
-        let records = vec![
-            rec(
-                1, "Code.exe", "a.rs - ProjectA - Visual Studio Code",
-                "2026-08-16T09:00:00", "2026-08-16T09:30:00", 1800,
-            ),
-            rec(
-                2, "Code.exe", "b.rs - ProjectB - Visual Studio Code",
-                "2026-08-16T09:30:00", "2026-08-16T09:36:00", 360, // 6min > 5min
-            ),
-            rec(
-                3, "Code.exe", "b2.rs - ProjectB - Visual Studio Code",
-                "2026-08-16T09:36:00", "2026-08-16T10:00:00", 1440,
-            ),
-        ];
-        let r = aggregate_sessions(records, HashMap::new(), 900, 300);
-        // 一条：A 会话在 rec1 结束时未断（rec2 刚开始 360 不触发）；
-        // 实际上此测试中 rec2 累计 360 时才加到会话内，并与 rec3 继续累加；
-        // 断会话需要在某条"并入前"就发现累计>阈值。此测试期望会话2个，下面断言：
-        assert!(r.len() >= 1);
-        // 但项目 分布中必有 ProjectA 和 ProjectB
-        let all_proj: Vec<&str> = r.iter().map(|s| s.main_project.as_str()).collect();
-        assert!(all_proj.contains(&"ProjectA"));
-        assert!(all_proj.contains(&"ProjectB"));
-    }
-
-    #[test]
     fn aggregate_override_takes_priority() {
+        // 两条不同项目的 Code 记录；对第 2 条手动设为完全不同的 project
+        // 验证：显式 override 优先于 extract_project + 指纹传播
         let records = vec![
-            rec(
-                1, "Code.exe", "main.rs - ScreenManager - Visual Studio Code",
-                "2026-08-16T09:00:00", "2026-08-16T09:30:00", 1800,
-            ),
-            rec(
-                2, "Code.exe", "lib.rs - ScreenManager - Visual Studio Code",
-                "2026-08-16T09:30:00", "2026-08-16T10:00:00", 1800,
-            ),
+            rec(1, "Code.exe", "main.rs - ProjectA - Visual Studio Code",
+                "2026-08-16T09:00:00", "2026-08-16T09:30:00", 1800),
+            rec(2, "Code.exe", "lib.rs - ProjectB - Visual Studio Code",
+                "2026-08-16T09:30:00", "2026-08-16T10:00:00", 1800),
         ];
         let mut overrides = HashMap::new();
         overrides.insert(2, ("MyCustomProject".to_string(), "user".to_string()));
-        let r = aggregate_sessions(records, overrides, 900, 300);
-        // 断会话：第 2 条累计 1800 > 300，会在并入前断
+        let r = aggregate_sessions(records, overrides, empty_cat_map(), 900, 300);
+        // ProjectA (1800s) 与 MyCustomProject (1800s) 不同 → 触发项目切换断点 → 2 段
         assert_eq!(r.len(), 2);
-        assert_eq!(r[0].main_project, "ScreenManager");
+        assert_eq!(r[0].main_project, "ProjectA");
         assert_eq!(r[1].main_project, "MyCustomProject");
     }
 }

@@ -26,6 +26,17 @@ const RETRY_TIMES: u32 = 2;
 /// 每次重试前的等待时间（简单线性退避）。
 const RETRY_DELAY: Duration = Duration::from_millis(500);
 
+/// 游戏 / 工作平衡三态标签，用于提示词分支 + JSON 解析兜底
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BalanceState {
+    /// 游戏占比 > 15% 或 游戏时长 > 工作时长
+    GameExcessive,
+    /// 工作占比 > 70% 且 游戏占比 < 5%
+    WorkOverload,
+    /// 其余情况：节奏基本平衡
+    Balanced,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReportData {
     pub start_date: String,
@@ -590,6 +601,22 @@ fn is_distractor_category(name: &str) -> bool {
     kw.iter().any(|k| s.contains(k))
 }
 
+/// 分类名是否属于「游戏类」（任务 5：游戏/工作平衡的独立判定维度）
+fn is_game_category(name: &str) -> bool {
+    let s = name;
+    // Steam游戏 / 游戏娱乐 / 含"游戏"关键字的自定义分类都算
+    s.contains("游戏")
+}
+
+/// 分类名是否属于「工作类」（任务 5：效率产出维度）
+fn is_work_category(name: &str) -> bool {
+    let s = name;
+    // 开发工具 / 办公工具 / 设计工具 / 知识库 / AI工具 —— 代表主动产出的时间
+    let kw = ["开发", "办公", "设计", "知识库", "ai工具", "编程", "代码", "ide"];
+    let lower = s.to_lowercase();
+    kw.iter().any(|k| lower.contains(k))
+}
+
 /// 从分类统计列表里，按 key 分类累加秒数；以及总秒数
 fn sum_seconds_by<'a, F>(cats: &'a [CategoryStats], pred: F) -> (i64, i64)
 where
@@ -670,7 +697,7 @@ fn precompute_report_blocks(
     data: &ReportData,
     report_type: &str,
     periodicity: &str,
-) -> String {
+) -> (String, BalanceState) {
     let total = data.total_duration.max(1);
     let total_minutes = (data.total_duration as f64 / 60.0).round() as i64;
     let days = data.day_span.max(1);
@@ -699,6 +726,19 @@ fn precompute_report_blocks(
     let include_compare = matches!(periodicity, "weekly" | "monthly");
 
     // ====== 0. 【模型写作参考摘要：只看这里，禁止改写】 ======
+    // — 任务 5 关键指标：游戏时长 / 工作时长 / 游戏-工作平衡判定 —
+    let (game_sec, _) = sum_seconds_by(&data.category_stats, is_game_category);
+    let (work_sec, _) = sum_seconds_by(&data.category_stats, is_work_category);
+    let game_pct = if total > 0 { (game_sec as f64 / total as f64) * 100.0 } else { 0.0 };
+    let work_pct = if total > 0 { (work_sec as f64 / total as f64) * 100.0 } else { 0.0 };
+    // 游戏过重判定（任务 5）：游戏占比 > 15% 或 游戏时长 > 工作时长
+    let game_excessive = game_sec > 0 && (game_pct > 15.0 || game_sec > work_sec.max(1));
+    // 工作过载判定（任务 5）：工作占比 > 70% 且 分心/游戏占比极低
+    let work_overload = work_pct > 70.0 && game_pct < 5.0;
+    // 快速切屏统计（任务 3）：标记次数
+    let quick_switch_cnt = data.work_sessions.iter().filter(|s| s.quick_switch).count();
+    let quick_switch_sec: i64 = data.work_sessions.iter().filter(|s| s.quick_switch).map(|s| s.total_seconds).sum();
+
     let cat_top = data.category_stats.iter().max_by_key(|c| c.duration_seconds);
     let app_top = data.app_stats.first();
     out.push_str("======【模型写作参考摘要：2-3句话即可，禁止改写具体数字】======\n");
@@ -712,6 +752,27 @@ fn precompute_report_blocks(
     if let Some(app) = app_top {
         let pct = (app.total_seconds as f64 / total as f64) * 100.0;
         out.push_str(&format!("  - 最多应用：{} {} / {:.1}% / {}次\n", app.process_name, format_duration_hm(app.total_seconds), pct, app.record_count));
+    }
+    // —— 任务 5：游戏 / 工作平衡 ——
+    out.push_str(&format!("  - 游戏累计：{}（{:.1}%）；工作累计：{}（{:.1}%）\n",
+        format_duration_hm(game_sec), game_pct, format_duration_hm(work_sec), work_pct));
+    let balance_state = if game_excessive {
+        BalanceState::GameExcessive
+    } else if work_overload {
+        BalanceState::WorkOverload
+    } else {
+        BalanceState::Balanced
+    };
+    let balance_tag = match balance_state {
+        BalanceState::GameExcessive => "游戏过多：建议减少游戏时长，保护眼睛（每游戏 1h 远眺 5 分钟），同时增加工作占比避免事务堆积",
+        BalanceState::WorkOverload => "工作占比过高：建议适当安排娱乐（游戏/社交）放松，避免长期高强度后效率滑坡",
+        BalanceState::Balanced => "游戏/工作节奏基本平衡",
+    };
+    out.push_str(&format!("  - 平衡判定：{}\n", balance_tag));
+    // —— 任务 3：快速切屏 ——
+    if quick_switch_cnt > 0 {
+        out.push_str(&format!("  - 快速切屏：{} 段（共 {}，不足 5 分钟即切换）— 建议聚焦任务收尾后再切\n",
+            quick_switch_cnt, format_duration_hm(quick_switch_sec)));
     }
     if show_hourly && !data.hourly_heatmap.is_empty() {
         let (peak, valley) = peak_valley_hours(&data.hourly_heatmap);
@@ -762,30 +823,45 @@ fn precompute_report_blocks(
         // 日报：明日待办的动作线索（不超过 5 条，每条 2~12 字短描述）
         let mut items: Vec<String> = Vec::new();
         let (proj_slice, unmarked, total_proj) = aggregate_projects(&data.work_sessions);
-        // — 未标记记录多 → 明日优先补标
+        // — 【任务 5】游戏过多 → 明天把游戏集中到中午 12-15 点高效时段（避开熬夜/工作冲突）
+        if game_excessive {
+            items.push("游戏集中到 12:00–15:00".to_string());
+            items.push("连续工作前关闭 Steam 推送".to_string());
+        }
+        // — 【任务 5】工作过载 → 明天穿插娱乐放松
+        if work_overload {
+            items.push("晚饭后留 30 分钟游戏放松".to_string());
+        }
+        // — 未标记记录多 → 明日结束前 5 分钟整理（用户明确要求）
         if unmarked > 0 && !proj_slice.is_empty() {
             let ratio = unmarked as f64 / total_proj.max(1) as f64;
-            if ratio > 0.08 {
-                items.push("补标未归属的记录".to_string());
+            if ratio > 0.05 {
+                items.push("结束前 5 分钟整理未标记记录".to_string());
             }
+        }
+        // — 快速切屏过多 → 先把当前任务收个小尾再切换
+        if quick_switch_cnt >= 3 {
+            items.push("切换前先给当前任务写一句收尾".to_string());
         }
         // — 有分心项 > 6% → 明日安排到固定时段
         let distractor_sec: i64 = data.app_stats.iter().filter(|a| {
             let cat = data.app_categories.get(&a.process_name).map(String::as_str).unwrap_or("");
             is_distractor_category(cat)
         }).map(|a| a.total_seconds).sum();
-        if distractor_sec * 100 > total * 6 {
+        if distractor_sec * 100 > total * 6 && !game_excessive {
             items.push("把社交/娱乐集中到固定时段".to_string());
         }
-        // — 最长专注太短 → 尝试一个 90 分钟番茄
+        // — 最长专注太短 → 尝试一个 45-60 分钟番茄
         if let Some(s) = data.work_sessions.iter().max_by_key(|s| s.total_seconds) {
             if s.total_seconds < 60 * 45 {
                 items.push("尝试一个 45~60 分钟长专注".to_string());
             }
         }
         // — 久坐 / 单日过忙
-        if total_minutes > 6 * 60 {
+        if total_minutes > 6 * 60 && !work_overload {
             items.push("下午安排 10 分钟站立休息".to_string());
+        } else if work_overload && total_minutes > 7 * 60 {
+            items.push("晚 21 点后停止工作转为休息".to_string());
         }
         // 兜底
         if items.is_empty() {
@@ -798,7 +874,7 @@ fn precompute_report_blocks(
             out.push_str(&format!("     {}. {}\n", i + 1, it));
         }
     } else {
-        // 周报/月报：下周关注候选（从项目 Top、开发类缺口、分心降不下来、未标记占比高 四方面挑）
+        // 周报/月报：下周关注候选（从项目 Top、开发类缺口、游戏/工作平衡、分心、未标记、快速切屏、强度 七方面挑）
         let mut items: Vec<(String, String)> = Vec::new(); // (项目/方向名, 说明)
         let (proj_slice, unmarked, total_proj) = aggregate_projects(&data.work_sessions);
         // 1) 项目投入 Top 1-2
@@ -807,8 +883,23 @@ fn precompute_report_blocks(
                 items.push((format!("项目「{}」", p.name), "保持或增量投入".to_string()));
             }
         }
-        if unmarked > 0 && total_proj > 0 && unmarked as f64 / total_proj as f64 > 0.08 {
+        // — 【任务 5】游戏过多 → 减游戏、保眼睛、提工作占比（用户明确的三条建议）
+        if game_excessive {
+            items.push(("Steam 游戏时段".to_string(), "集中到中午 12:00–15:00，避免夜间穿插".to_string()));
+            items.push(("减少游戏时长".to_string(), "每游戏 1 小时远眺 5 分钟护眼；多的时间挪回工作".to_string()));
+            items.push(("Steam 推送通知".to_string(), "连续工作前先关闭推送，降低被打断频率".to_string()));
+        }
+        // — 【任务 5】工作过载 → 适当放松
+        if work_overload {
+            items.push(("工作强度调整".to_string(), "工作日晚间或周末穿插 30–60 分钟游戏/社交放松".to_string()));
+        }
+        // 未标记项目占比高 → 每日结束 5 分钟整理（用户明确要求）
+        if unmarked > 0 && total_proj > 0 && unmarked as f64 / total_proj as f64 > 0.05 {
             items.push(("项目归属补标".to_string(), "每日结束 5 分钟整理未标记记录".to_string()));
+        }
+        // 快速切屏 ≥ 1 天 3 段 → 建议收尾再切
+        if quick_switch_cnt >= (3 * days.max(1)) as usize {
+            items.push(("快速切屏控制".to_string(), "切换任务前先写一句当前收尾，避免心理切换成本累积".to_string()));
         }
         // 2) 开发占比如果环比下滑 ≥ 5pp，或 tech 报告 ≤ 40% → 提开发专注
         if let Some(c) = &data.compare_to_prev {
@@ -822,14 +913,14 @@ fn precompute_report_blocks(
                 items.push(("IDE/调试时长".to_string(), "减少无关窗口切换，把代码工作集中到上午".to_string()));
             }
         }
-        // 3) 分心类占比 > 10% 或环比上升
+        // 3) 分心类占比 > 10% 或环比上升（非游戏过多时单独提——游戏过多分支已经覆盖）
         let (dis_sec, all_sec) = sum_seconds_by(&data.category_stats, |n| is_distractor_category(n));
         let cur_ratio = if all_sec > 0 { dis_sec as f64 / all_sec as f64 } else { 0.0 };
-        if cur_ratio > 0.10 {
+        if cur_ratio > 0.10 && !game_excessive {
             items.push(("社交/娱乐分心".to_string(), "集中到晚间 1 小时，避免工作时段穿插".to_string()));
         }
         if let Some(c) = &data.compare_to_prev {
-            if cur_ratio - c.prev_distractor_ratio > 0.03 {
+            if cur_ratio - c.prev_distractor_ratio > 0.03 && !game_excessive {
                 items.push(("分心占比上升".to_string(), "连续工作前先关闭推送/通知".to_string()));
             }
         }
@@ -839,8 +930,10 @@ fn precompute_report_blocks(
                 items.push(("专注段数下降".to_string(), "上午/下午各排一个 25 分钟番茄钟保底".to_string()));
             }
             let total_h = (c.cur_total as f64) / 3600.0;
-            if total_h > 45.0 {
-                items.push(("工作强度偏高".to_string(), "周五下午留整理与恢复时间".to_string()));
+            if total_h > 45.0 && !work_overload {
+                items.push(("工作强度偏高".to_string(), "周五下午留 10 分钟整理与恢复时间".to_string()));
+            } else if total_h > 45.0 && work_overload {
+                items.push(("工作强度偏高".to_string(), "周五下午留整理+恢复，晚上不排产出任务".to_string()));
             }
         }
         // 兜底
@@ -1150,7 +1243,7 @@ fn precompute_report_blocks(
     // 末尾说明（模型不要删）
     out.push_str("---\n*报告表格、排名、百分比、次数、时长均由程序基于 usage_records 原始记录自动统计生成。*\n");
 
-    out
+    (out, balance_state)
 }
 
 fn build_prompt(report_type: &str, context: &str) -> String {
@@ -1173,6 +1266,11 @@ fn build_prompt(report_type: &str, context: &str) -> String {
         "pomodoro" => "这是番茄钟报告：B 段聚焦「最长专注段表现」「专注段数是否达标」「>25 分钟段占比」，围绕专注间隔/休息给具体建议。",
         _ => "",
     };
+    let balance_hint = "【任务内容补充：B段建议必须先看【模型写作参考摘要】里的「平衡判定」行】\n\
+    - 若写着「游戏过多」：首条或前两条必须聚焦减少游戏（时段集中、护眼提醒：每游戏1h远眺5min、游戏时长挪回工作防堆积、关Steam推送），不要泛泛写游戏放松。\n\
+    - 若写着「工作占比过高」：必须至少有一条建议适当安排娱乐（游戏/社交/户外）放松，避免连轴转。\n\
+    - 若写着「基本平衡」：建议保持节奏即可。\n\
+    - 此外若摘要出现「快速切屏 N 段」：需提一句「切换前先写一句收尾」或类似降低切屏的动作。";
     let outlook_field_note = if is_daily {
         "  \"outlook\": \"【C段：明日安排/关注的 1-2 件具体事；40 字内；确实没的可写就写“明日无特殊关注”】\","
     } else {
@@ -1182,6 +1280,7 @@ fn build_prompt(report_type: &str, context: &str) -> String {
 r#"你的任务是**只写三段中文文字**填入报告骨架，不计算、不改写、不重排任何数字或表格。
 {periodicity_hint}
 {type_hint}
+{balance_hint}
 
 【严格操作规则（违反=报告作废）】
 1. 输出必须是严格 JSON，只输出下面 JSON 模板里给出的 3 个字段，不要输出任何其它字符、标题、分隔线、解释语、Markdown。
@@ -1190,13 +1289,14 @@ r#"你的任务是**只写三段中文文字**填入报告骨架，不计算、�
 4. 禁止输出骨架里不存在的 section（如「异常进程」「进程记录」「访问网页清单」等），也禁止自己编表格或列表。
 
 【任务内容】
-- A. overview（{{{{{{__OVERVIEW__}}}}}}）：2-4 句中文，总结花在哪里、最主要 1-2 个分类、最主要应用、最突出特征（高峰/最长专注/最忙最闲日/环比变化）。只参考【模型写作参考摘要】已给出的结论，不要自行分析。建议 80-150 字。
+- A. overview（{{{{{{__OVERVIEW__}}}}}}）：2-4 句中文，总结花在哪里、最主要 1-2 个分类、最主要应用、最突出特征（高峰/最长专注/最忙最闲日/环比变化、游戏-工作平衡判定结论）。只参考【模型写作参考摘要】已给出的结论，不要自行分析。建议 80-150 字。
 - B. suggestions（{{{{{{__SUGGESTIONS__}}}}}}）：2-4 条中文建议，用「1.  2.  3. 」这样的编号格式（每条 1-2 句）。可围绕：
   1) 专注分析：最长专注时段表现 / 段数达标情况
   2) 分心分析：若候选里给出了分心应用/分类，建议安排到固定时段；否则不提
   3) 效率高峰：把重要工作安排到效率高峰时段
-  4) 工作强度 / 久坐 / 切换过频提醒
+  4) 工作强度 / 久坐 / 切换过频（含快速切屏）提醒
   5) 结合每日节奏或上周环比差异给出作息建议
+  6) ★ 游戏/工作平衡：严格按上方「平衡判定」和「任务内容补充」分支写（游戏过多→减游戏+护眼+增工作；工作过载→适当娱乐；平衡→保持）
   不要空话套话，每条要有具体动作。
 - C. outlook（{{{{{{__OUTLOOK__}}}}}}）：1-3 句短中文，下周关注 / 明日关注 / 下月调节点。
   * 若骨架里程序已列出「下周关注候选」项目清单或「明日具体待办」，严格只在这些候选范围内给概括，不要编新的项目名或新的数字；
@@ -1253,14 +1353,17 @@ fn periodicity_and_title(report_type: &str, start: &str, end: &str) -> (&'static
 }
 
 /// 容错解析模型返回的 JSON：`{ "overview": "...", "suggestions": "..." }`
-/// 解析失败时（小模型可能输出非 JSON 文字）做多层兜底：
-///   1) 提取第一个 `{...}` 块再试；
 /// 解析模型返回的 JSON 文本，返回 (overview, suggestions, outlook) 三段中文。
 /// 3 层兜底策略：
 ///   1) 直接 parse；字段缺失用默认
 ///   2) 截取第一个 { ... } 块 parse；
-///   3) 全失败返回空字符串 / 中文兜底（outlook 给通用一句）。
-fn parse_model_json_output(resp: &str) -> (String, String, String) {
+///   3) 全失败返回空字符串 / 中文兜底（suggestions / outlook 按 游戏过多 / 工作过载 / 平衡 三态分支，
+///      并结合周期类型给出"明日关注/下周关注/下月调节点"专属措辞）。
+fn parse_model_json_output(
+    resp: &str,
+    balance_state: BalanceState,
+    periodicity: &str,
+) -> (String, String, String) {
     #[derive(Deserialize)]
     struct Partials {
         overview: Option<String>,
@@ -1290,16 +1393,58 @@ fn parse_model_json_output(resp: &str) -> (String, String, String) {
             }
         }
     }
-    // 兜底：把返回前 6 行当 overview，suggestions 用默认；outlook 给通用一句
+    // 兜底：把返回前 6 行当 overview；suggestions / outlook 结合平衡状态 + 周期生成
     let fallback_overview = if trimmed.is_empty() {
         "（本次生成未返回总览描述）".to_string()
     } else {
         trimmed.lines().take(6).collect::<Vec<_>>().join(" ").trim().to_string()
     };
-    let fallback_suggestions = "1. 将重要工作安排在效率高峰时段，连续专注超过 90 分钟后主动安排 10 分钟休息。\n\
-2. 若使用过程中出现游戏、社交、视频等分心源，可集中安排在每日固定时段以减少对专注的打断。\n\
-3. 根据每日时长分布，把同类任务安排在同一天的连续时段，减少任务切换带来的认知成本。".to_string();
-    let fallback_outlook = "继续保持当前节奏，遇到连续长段工作穿插 10 分钟休息；未标记的记录在收尾阶段补标即可。".to_string();
+
+    // ——— 三态分支：suggestions 兜底 ———
+    //   * GameExcessive：减游戏 + 护眼 + 增工作占比 + 关推送 + 整理未标记
+    //   * WorkOverload ：适当娱乐放松 + 每周预留恢复时间 + 整理未标记
+    //   * Balanced     ：保持节奏 + 高峰排重要工作 + 整理未标记
+    let fallback_suggestions = match balance_state {
+        BalanceState::GameExcessive => [
+            "1. 将 Steam / 游戏集中到 12:00-15:00 午休或高效后时段，避免夜间分心和影响次日状态。",
+            "2. 减少不必要的游戏时长，每游戏 1 小时起身远眺 5 分钟保护眼睛；把腾出来的时间补到产出型工作，避免事务堆积。",
+            "3. 每日结束前花 5 分钟整理未标记记录，提升项目归属准确性；连续工作前关闭 Steam 推送通知，减少分心干扰。",
+        ].join("\n"),
+        BalanceState::WorkOverload => [
+            "1. 当前工作占比较高，建议在晚饭后或午间穿插 20-30 分钟娱乐（游戏/社交/散步）放松，避免长期高强度后效率滑坡。",
+            "2. 周五下午预留 10-15 分钟用于恢复，梳理收尾清单，避免把高强度直接带入周末。",
+            "3. 每日结束前花 5 分钟整理未标记记录，把事务和项目归属理清，第二天能更快进入状态。",
+        ].join("\n"),
+        BalanceState::Balanced => [
+            "1. 保持当前游戏/工作节奏，把重要工作安排在效率高峰时段；连续专注超过 90 分钟后主动安排 10 分钟休息。",
+            "2. 游戏、社交、视频等分心源尽量集中在每日固定时段，减少对连续专注的打断。",
+            "3. 每日结束前花 5 分钟整理未标记记录，把同类任务安排在同一天的连续时段，降低任务切换成本。",
+        ].join("\n"),
+    };
+
+    // ——— 三态分支 × 周期分支：outlook 兜底 ———
+    let outlook_title = if periodicity == "daily" {
+        "明日关注"
+    } else if periodicity == "monthly" {
+        "下月调节点"
+    } else {
+        "下周关注"
+    };
+    let fallback_outlook = match (balance_state, periodicity) {
+        (BalanceState::GameExcessive, "daily") =>
+            "明天重点把 Steam 游戏集中到午间 12-15 点，睡前不碰游戏；工作前关闭 Steam 推送，结束前 5 分钟整理未标记记录。".to_string(),
+        (BalanceState::GameExcessive, _) =>
+            format!("{}重点保持合理投入：社交娱乐尽量集中到每日晚间 1 小时；工作前关闭 Steam 推送；每日结束前 5 分钟整理未标记；每游戏 1 小时远眺 5 分钟保护视力。", outlook_title),
+        (BalanceState::WorkOverload, "daily") =>
+            "明天继续推进主线任务的同时，在晚饭后或下午穿插 20-30 分钟放松娱乐；周五下午留 10 分钟恢复；结束前 5 分钟整理未标记。".to_string(),
+        (BalanceState::WorkOverload, _) =>
+            format!("{}在保持进度前提下，每天留 20-30 分钟弹性娱乐或散步恢复；周五下午做 10 分钟收尾整理；避免连续多日高强度透支。", outlook_title),
+        (BalanceState::Balanced, "daily") =>
+            "延续今日节奏，把难任务放到高峰时段；连续长段工作前关闭推送通知；结束前 5 分钟整理未标记记录。".to_string(),
+        (BalanceState::Balanced, _) =>
+            format!("{}继续保持当前游戏/工作平衡；每日结束前 5 分钟整理未标记；遇到连续长段工作穿插 10 分钟休息。", outlook_title),
+    };
+
     (fallback_overview, fallback_suggestions, fallback_outlook)
 }
 
@@ -1383,7 +1528,7 @@ pub async fn generate_and_save_report(
                 db_guard.get_records_for_range_ordered(&params.start_date, &params.end_date).unwrap_or_default(),
                 db_guard.get_overrides_for_range(&params.start_date, &params.end_date).unwrap_or_default(),
             );
-            aggregate_sessions(ordered_records, overrides, idle_threshold, switch_threshold)
+            aggregate_sessions(ordered_records, overrides, app_categories.clone(), idle_threshold, switch_threshold)
         };
 
         // 小时级时间分布：分析效率高峰/低谷
@@ -1486,7 +1631,7 @@ pub async fn generate_and_save_report(
                         db_guard.get_records_for_range_ordered(&prev_start, &prev_end).unwrap_or_default(),
                         db_guard.get_overrides_for_range(&prev_start, &prev_end).unwrap_or_default(),
                     );
-                    aggregate_sessions(ordered, overrides, idle_threshold, switch_threshold)
+                    aggregate_sessions(ordered, overrides, app_categories.clone(), idle_threshold, switch_threshold)
                 };
                 // 当前值 & 计算
                 let cur_total = total;
@@ -1537,7 +1682,7 @@ pub async fn generate_and_save_report(
         }
     };
 
-    let context = precompute_report_blocks(&data, &params.report_type, &periodicity);
+    let (context, balance_state) = precompute_report_blocks(&data, &params.report_type, &periodicity);
     let prompt = build_prompt(&params.report_type, &context);
 
     // ——— Step 1：构建长时间请求客户端，用 IPv4 直连 + 5 分钟总超时 ———
@@ -1589,7 +1734,7 @@ pub async fn generate_and_save_report(
             可能原因：Ollama 进程在生成中途崩溃，或大模型冷启动超时", e))?;
 
     // ——— Step 4：解析模型返回的 JSON → 取 overview / suggestions / outlook → 与程序预渲染骨架合并 ———
-    let (overview, suggestions, outlook) = parse_model_json_output(&ollama_resp.response);
+    let (overview, suggestions, outlook) = parse_model_json_output(&ollama_resp.response, balance_state, &periodicity);
     // outlook 若真的为空（模型漏写 + fallback 意外为空），给最后一道保险
     let outlook = if outlook.trim().is_empty() {
         "继续保持当前节奏；未标记的记录在每日收尾花 5 分钟补标。".to_string()

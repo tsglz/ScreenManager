@@ -254,7 +254,25 @@ function WorkTimeline() {
                 />
                 <div className="wt-session-time">
                   {fmtClock(s.start_time)} – {fmtClock(s.end_time)}
-                  <div className="wt-session-duration">{fmtDuration(s.total_seconds)}</div>
+                  <div className="wt-session-duration">
+                    {fmtDuration(s.total_seconds)}
+                    {s.quick_switch && (
+                      <span
+                        className="wt-tag"
+                        title="会话不足 5 分钟即切换到下一段（非锁屏）"
+                        style={{
+                          marginLeft: 8,
+                          fontSize: 11,
+                          padding: '1px 6px',
+                          background: '#fff4e5',
+                          color: '#b35900',
+                          borderColor: '#e6a23c',
+                        }}
+                      >
+                        ⚡快速切屏
+                      </span>
+                    )}
+                  </div>
                 </div>
                 <div className="wt-session-project">
                   <div className="wt-session-project-name">
