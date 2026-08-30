@@ -4,8 +4,8 @@
   "pub_date": "2026-08-31T12:00:00Z",
   "platforms": {
     "windows-x86_64": {
-      "url": "https://github.com/tsglz/ScreenManager/releases/download/v2.2.1/ScreenManager_2.2.1_x64-setup.exe",
-      "signature": "https://github.com/tsglz/ScreenManager/releases/download/v2.2.1/ScreenManager_2.2.1_x64-setup.exe.sig"
+      "url": "https://github.com/tsglz/ScreenManager/releases/download/v2.2.0/ScreenManager_2.2.0_x64-setup.exe",
+      "signature": "https://github.com/tsglz/ScreenManager/releases/download/v2.2.0/ScreenManager_2.2.0_x64-setup.exe.sig"
     }
   }
 }
